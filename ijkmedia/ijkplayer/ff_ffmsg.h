@@ -2,7 +2,6 @@
  * ff_ffmsg.h
  *      based on PacketQueue in ffplay.c
  *
- * Copyright (c) 2013 Bilibili
  * Copyright (c) 2013 Zhang Rui <bbcallen@gmail.com>
  *
  * This file is part of ijkPlayer.
@@ -34,6 +33,7 @@
 #define FFP_MSG_VIDEO_RENDERING_START       402
 #define FFP_MSG_AUDIO_RENDERING_START       403
 #define FFP_MSG_VIDEO_ROTATION_CHANGED      404     /* arg1 = degree */
+
 #define FFP_MSG_AUDIO_DECODED_START         405
 #define FFP_MSG_VIDEO_DECODED_START         406
 #define FFP_MSG_OPEN_INPUT                  407
@@ -42,6 +42,7 @@
 #define FFP_MSG_VIDEO_SEEK_RENDERING_START  410
 #define FFP_MSG_AUDIO_SEEK_RENDERING_START  411
 
+#define FFP_MSG_VIDEO_RENDEING_FRAME        412
 #define FFP_MSG_BUFFERING_START             500
 #define FFP_MSG_BUFFERING_END               501
 #define FFP_MSG_BUFFERING_UPDATE            502     /* arg1 = buffering head position in time, arg2 = minimum percent in time or bytes */
@@ -53,7 +54,17 @@
 #define FFP_MSG_ACCURATE_SEEK_COMPLETE      900     /* arg1 = current position*/
 #define FFP_MSG_GET_IMG_STATE               1000    /* arg1 = timestamp, arg2 = result code, obj = file name*/
 
+#define FFP_MSG_SEND_START_LOG      701
+#define FFP_REQ_IMAGE_REFRESH               702
+#define FFP_MSG_PATH_REDIRECT               801
+#define FFP_MSG_PATH_LOCAL_CACHED_VIDEO     901
+#define FFP_MSG_HTTP_REDIRECT_IP           2000
+#define FFP_MSG_HTTP_M3U8_OPTIMIZE         2001
+#define FFP_MSG_PARSE_AUDIO_TRACKS         1002
 #define FFP_MSG_VIDEO_DECODER_OPEN          10001
+#define FFP_MSG_DOWNLOAD_COMPLETE           10002
+
+#define FFP_MSG_START_ERROR_INFO            1101  //to pass start_error_log and start_eror_log_ex when the player is release.
 
 #define FFP_REQ_START                       20001
 #define FFP_REQ_PAUSE                       20002
@@ -62,10 +73,11 @@
 #define FFP_PROP_FLOAT_VIDEO_DECODE_FRAMES_PER_SECOND   10001
 #define FFP_PROP_FLOAT_VIDEO_OUTPUT_FRAMES_PER_SECOND   10002
 #define FFP_PROP_FLOAT_PLAYBACK_RATE                    10003
-#define FFP_PROP_FLOAT_PLAYBACK_VOLUME                  10006
 #define FFP_PROP_FLOAT_AVDELAY                          10004
 #define FFP_PROP_FLOAT_AVDIFF                           10005
+#define FFP_PROP_FLOAT_PLAYBACK_VOLUME                  10006
 #define FFP_PROP_FLOAT_DROP_FRAME_RATE                  10007
+#define FFP_PROP_INT64_SELECTED_SUBTITLE_STREAM            19000
 
 #define FFP_PROP_INT64_SELECTED_VIDEO_STREAM            20001
 #define FFP_PROP_INT64_SELECTED_AUDIO_STREAM            20002
@@ -91,19 +103,22 @@
 #define FFP_PROP_INT64_ASYNC_STATISTIC_BUF_FORWARDS     20202
 #define FFP_PROP_INT64_ASYNC_STATISTIC_BUF_CAPACITY     20203
 #define FFP_PROP_INT64_TRAFFIC_STATISTIC_BYTE_COUNT     20204
-
-#define FFP_PROP_INT64_LATEST_SEEK_LOAD_DURATION        20300
-
-#define FFP_PROP_INT64_CACHE_STATISTIC_PHYSICAL_POS     20205
-
-#define FFP_PROP_INT64_CACHE_STATISTIC_FILE_FORWARDS    20206
-
-#define FFP_PROP_INT64_CACHE_STATISTIC_FILE_POS         20207
-
+#define FFP_PROP_INT64_TCP_READ_TIMESTAMP               20205
+#define FFP_PROP_INT64_TRAFFIC_STATISTIC_BYTE_COUNT     20206
+#define FFP_PROP_INT64_CACHE_STATISTIC_PHYSICAL_POS     20207
 #define FFP_PROP_INT64_CACHE_STATISTIC_COUNT_BYTES      20208
-
 #define FFP_PROP_INT64_LOGICAL_FILE_SIZE                20209
 #define FFP_PROP_INT64_SHARE_CACHE_DATA                 20210
 #define FFP_PROP_INT64_IMMEDIATE_RECONNECT              20211
+#define FFP_PROP_INT64_CACHE_STATISTIC_FILE_FORWARDS    20212
+#define FFP_PROP_INT64_CACHE_STATISTIC_FILE_POS         20213
+#define FFP_PROP_INT64_TCP_AVG_SPEED                    20220
+#define FFP_PROP_INT64_LATEST_SEEK_LOAD_DURATION        20300
+#define FFP_PROP_INT64_MAX_BUFFER_SIZE                  21300
+#define FFP_PROP_INT64_MAX_BUFFER_TIME                  21301
+#define FFP_PROP_INT64_CUR_WATER_MARK                   21302
+
+
+
 
 #endif

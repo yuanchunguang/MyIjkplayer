@@ -30,7 +30,8 @@
 #include "ijkmeta.h"
 
 #ifndef MPTRACE
-#define MPTRACE ALOGD
+//#define MPTRACE ALOGD
+#define MPTRACE if(av_log_get_level()>=AV_LOG_DEBUG) ALOGD
 #endif
 
 typedef struct IjkMediaPlayer IjkMediaPlayer;
@@ -170,6 +171,9 @@ void*            ijkmp_set_ijkio_inject_opaque(IjkMediaPlayer *mp, void *opaque)
 void            ijkmp_set_option(IjkMediaPlayer *mp, int opt_category, const char *name, const char *value);
 void            ijkmp_set_option_int(IjkMediaPlayer *mp, int opt_category, const char *name, int64_t value);
 
+void ijkmp_set_player_option(IjkMediaPlayer *mp, const char *name, const char *value);
+void ijkmp_set_player_option_int(IjkMediaPlayer *mp, const char *name, int64_t value);
+
 int             ijkmp_get_video_codec_info(IjkMediaPlayer *mp, char **codec_info);
 int             ijkmp_get_audio_codec_info(IjkMediaPlayer *mp, char **codec_info);
 void            ijkmp_set_playback_rate(IjkMediaPlayer *mp, float rate);
@@ -205,8 +209,10 @@ int             ijkmp_seek_to(IjkMediaPlayer *mp, long msec);
 int             ijkmp_get_state(IjkMediaPlayer *mp);
 bool            ijkmp_is_playing(IjkMediaPlayer *mp);
 long            ijkmp_get_current_position(IjkMediaPlayer *mp);
+int64_t         ijkmp_get_play_start_timestamp(IjkMediaPlayer *mp);
 long            ijkmp_get_duration(IjkMediaPlayer *mp);
 long            ijkmp_get_playable_duration(IjkMediaPlayer *mp);
+long            ijkmp_get_played_duration(IjkMediaPlayer *mp);
 void            ijkmp_set_loop(IjkMediaPlayer *mp, int loop);
 int             ijkmp_get_loop(IjkMediaPlayer *mp);
 
@@ -214,8 +220,13 @@ void           *ijkmp_get_weak_thiz(IjkMediaPlayer *mp);
 void           *ijkmp_set_weak_thiz(IjkMediaPlayer *mp, void *weak_thiz);
 
 /* return < 0 if aborted, 0 if no packet and > 0 if packet.  */
-/* need to call msg_free_res for freeing the resouce obtained in msg */
 int             ijkmp_get_msg(IjkMediaPlayer *mp, AVMessage *msg, int block);
 void            ijkmp_set_frame_at_time(IjkMediaPlayer *mp, const char *path, int64_t start_time, int64_t end_time, int num, int definition);
+
+int             ijkmp_get_start_error_code(IjkMediaPlayer *mp);
+int             ijkmp_get_start_error_code_ex(IjkMediaPlayer *mp);
+
+int ijkmp_create_rsa_keys(int bits, const char* seed, char** private_key,  char** public_key);
+int ijkmp_rsa_decrypt( const char* seed, const char* private_key, const char* src, char** dst );
 
 #endif

@@ -2,7 +2,6 @@
  * ff_ffinc.h
  *      ffmpeg headers
  *
- * Copyright (c) 2013 Bilibili
  * Copyright (c) 2013 Zhang Rui <bbcallen@gmail.com>
  *
  * This file is part of ijkPlayer.
@@ -38,6 +37,7 @@
 #include "libavutil/opt.h"
 #include "libavutil/version.h"
 #include "libswresample/swresample.h"
+#include "libavutil/rsa_crypto.h"
 
 #include "ijksdl/ijksdl.h"
 

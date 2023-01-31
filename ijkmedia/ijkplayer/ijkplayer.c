@@ -44,8 +44,10 @@ inline static void ijkmp_destroy(IjkMediaPlayer *mp)
     if (!mp)
         return;
 
+    MPTRACE("%s, ffplayer destroy begin\n", __func__);
     ffp_destroy_p(&mp->ffplayer);
     if (mp->msg_thread) {
+        MPTRACE("%s, ffplayer destroy wait ff_msg_loop thread\n", __func__);
         SDL_WaitThread(mp->msg_thread, NULL);
         mp->msg_thread = NULL;
     }
@@ -55,6 +57,8 @@ inline static void ijkmp_destroy(IjkMediaPlayer *mp)
     freep((void**)&mp->data_source);
     memset(mp, 0, sizeof(IjkMediaPlayer));
     freep((void**)&mp);
+    
+    MPTRACE("%s, ffplayer destroy finish\n", __func__);
 }
 
 inline static void ijkmp_destroy_p(IjkMediaPlayer **pmp)
@@ -112,7 +116,15 @@ void ijkmp_change_state_l(IjkMediaPlayer *mp, int new_state)
 {
     mp->mp_state = new_state;
     ffp_notify_msg1(mp->ffplayer, FFP_MSG_PLAYBACK_STATE_CHANGED);
+    MPTRACE("change play state=%d\n", new_state);
 }
+
+int ijkmp_get_state(IjkMediaPlayer *mp)
+{
+    MPTRACE("get play state=%d\n", mp->mp_state);
+    return mp->mp_state;
+}
+
 
 IjkMediaPlayer *ijkmp_create(int (*msg_loop)(void*))
 {
@@ -188,6 +200,17 @@ void ijkmp_set_option_int(IjkMediaPlayer *mp, int opt_category, const char *name
     // MPTRACE("%s()=void\n", __func__);
 }
 
+
+void  ijkmp_set_player_option(IjkMediaPlayer *mp, const char *name, const char *value){
+    assert(mp);
+    ff_set_player_option(mp->ffplayer->app_ctx, name,value);
+}
+
+void  ijkmp_set_player_option_int(IjkMediaPlayer *mp, const char *name, int64_t value){
+    assert(mp);
+    ff_set_player_option_int(mp->ffplayer->app_ctx, name,value);
+}
+
 int ijkmp_get_video_codec_info(IjkMediaPlayer *mp, char **codec_info)
 {
     assert(mp);
@@ -230,6 +253,44 @@ void ijkmp_set_playback_volume(IjkMediaPlayer *mp, float volume)
     MPTRACE("%s(%f)\n", __func__, volume);
     pthread_mutex_lock(&mp->mutex);
     ffp_set_playback_volume(mp->ffplayer, volume);
+    pthread_mutex_unlock(&mp->mutex);
+    MPTRACE("%s()=void\n", __func__);
+}
+int ijkmp_get_start_error_code(IjkMediaPlayer *mp)
+{
+    assert(mp);
+    if(mp == NULL)
+        return 0;
+    
+    MPTRACE("%s\n", __func__);
+    pthread_mutex_lock(&mp->mutex);
+    int ret = ffp_get_start_error_code(mp->ffplayer);
+    pthread_mutex_unlock(&mp->mutex);
+    MPTRACE("%s()=void\n", __func__);
+    return ret;
+}
+
+int ijkmp_get_start_error_code_ex(IjkMediaPlayer *mp)
+{
+    assert(mp);
+    if(mp == NULL)
+        return 0;
+    
+    MPTRACE("%s\n", __func__);
+    pthread_mutex_lock(&mp->mutex);
+    int ret = ffp_get_start_error_code_ex(mp->ffplayer);
+    pthread_mutex_unlock(&mp->mutex);
+    MPTRACE("%s()=void\n", __func__);
+    return ret;
+}
+
+void ijkmp_set_playback_rate(IjkMediaPlayer *mp, float rate)
+{
+    assert(mp);
+
+    MPTRACE("%s(%f)\n", __func__, rate);
+    pthread_mutex_lock(&mp->mutex);
+    ffp_set_playback_rate(mp->ffplayer, rate);
     pthread_mutex_unlock(&mp->mutex);
     MPTRACE("%s()=void\n", __func__);
 }
@@ -286,8 +347,10 @@ void ijkmp_set_property_int64(IjkMediaPlayer *mp, int id, int64_t value)
 
 IjkMediaMeta *ijkmp_get_meta_l(IjkMediaPlayer *mp)
 {
-    assert(mp);
-
+    if (!mp) {
+        return NULL;
+    }
+    
     MPTRACE("%s\n", __func__);
     IjkMediaMeta *ret = ffp_get_meta_l(mp->ffplayer);
     MPTRACE("%s()=void\n", __func__);
@@ -424,6 +487,7 @@ int ijkmp_prepare_async(IjkMediaPlayer *mp)
     assert(mp);
     MPTRACE("ijkmp_prepare_async()\n");
     pthread_mutex_lock(&mp->mutex);
+    mp->play_start_timestamp = 0;
     int retval = ijkmp_prepare_async_l(mp);
     pthread_mutex_unlock(&mp->mutex);
     MPTRACE("ijkmp_prepare_async()=%d\n", retval);
@@ -507,6 +571,28 @@ int ijkmp_pause(IjkMediaPlayer *mp)
     int retval = ijkmp_pause_l(mp);
     pthread_mutex_unlock(&mp->mutex);
     MPTRACE("ijkmp_pause()=%d\n", retval);
+    return retval;
+}
+
+static int ijkmp_image_refresh_l(IjkMediaPlayer *mp)
+{
+    assert(mp);
+
+    //MP_RET_IF_FAILED(ikjmp_chkst_pause_l(mp->mp_state));
+
+    ffp_notify_msg1(mp->ffplayer, FFP_REQ_IMAGE_REFRESH);
+
+    return 0;
+}
+
+int ijkmp_image_refresh(IjkMediaPlayer *mp)
+{
+    assert(mp);
+    MPTRACE("ijkmp_image_refresh()\n");
+    pthread_mutex_lock(&mp->mutex);
+    int retval = ijkmp_image_refresh_l(mp);
+    pthread_mutex_unlock(&mp->mutex);
+    MPTRACE("ijkmp_image_refresh()=%d\n", retval);
     return retval;
 }
 
@@ -626,6 +712,15 @@ long ijkmp_get_current_position(IjkMediaPlayer *mp)
     return retval;
 }
 
+int64_t ijkmp_get_play_start_timestamp(IjkMediaPlayer *mp)
+{
+    assert(mp);
+    pthread_mutex_lock(&mp->mutex);
+    int64_t retval = mp->play_start_timestamp;
+    pthread_mutex_unlock(&mp->mutex);
+    return retval;
+}
+
 static long ijkmp_get_duration_l(IjkMediaPlayer *mp)
 {
     return ffp_get_duration_l(mp->ffplayer);
@@ -650,6 +745,15 @@ long ijkmp_get_playable_duration(IjkMediaPlayer *mp)
     assert(mp);
     pthread_mutex_lock(&mp->mutex);
     long retval = ijkmp_get_playable_duration_l(mp);
+    pthread_mutex_unlock(&mp->mutex);
+    return retval;
+}
+
+long ijkmp_get_played_duration(IjkMediaPlayer *mp)
+{
+    assert(mp);
+    pthread_mutex_lock(&mp->mutex);
+    long retval = ffp_get_played_duration_l(mp->ffplayer);
     pthread_mutex_unlock(&mp->mutex);
     return retval;
 }
@@ -685,7 +789,6 @@ void *ijkmp_set_weak_thiz(IjkMediaPlayer *mp, void *weak_thiz)
     return prev_weak_thiz;
 }
 
-/* need to call msg_free_res for freeing the resouce obtained in msg */
 int ijkmp_get_msg(IjkMediaPlayer *mp, AVMessage *msg, int block)
 {
     assert(mp);
@@ -705,14 +808,16 @@ int ijkmp_get_msg(IjkMediaPlayer *mp, AVMessage *msg, int block)
                 // FIXME: 1: onError() ?
                 av_log(mp->ffplayer, AV_LOG_DEBUG, "FFP_MSG_PREPARED: expecting mp_state==MP_STATE_ASYNC_PREPARING\n");
             }
-            if (!mp->ffplayer->start_on_prepared) {
+            //fix bug of not notify pause state when start
+            //if (ffp_is_paused_l(mp->ffplayer)) {
+            if (ffp_is_pause_req(mp->ffplayer)) {
                 ijkmp_change_state_l(mp, MP_STATE_PAUSED);
             }
             pthread_mutex_unlock(&mp->mutex);
             break;
-
+    
         case FFP_MSG_COMPLETED:
-            MPTRACE("ijkmp_get_msg: FFP_MSG_COMPLETED\n");
+            MPTRACE("ijkmp_get_msg: FFP_MSG_COMPLETED, seekend=%d\n", msg->arg1);
 
             pthread_mutex_lock(&mp->mutex);
             mp->restart = 1;
@@ -772,6 +877,16 @@ int ijkmp_get_msg(IjkMediaPlayer *mp, AVMessage *msg, int block)
             pthread_mutex_unlock(&mp->mutex);
             break;
 
+        case FFP_REQ_IMAGE_REFRESH:
+            MPTRACE("ijkmp_get_msg: FFP_REQ_IMAGE_REFRESH\n");
+            continue_wait_next_msg = 1;
+            pthread_mutex_lock(&mp->mutex);
+
+            int ret = ffp_image_refresh_l(mp->ffplayer);
+
+            pthread_mutex_unlock(&mp->mutex);
+            break;
+
         case FFP_REQ_SEEK:
             MPTRACE("ijkmp_get_msg: FFP_REQ_SEEK\n");
             continue_wait_next_msg = 1;
@@ -785,14 +900,32 @@ int ijkmp_get_msg(IjkMediaPlayer *mp, AVMessage *msg, int block)
             }
             pthread_mutex_unlock(&mp->mutex);
             break;
+                
+        case FFP_MSG_AUDIO_RENDERING_START:
+        case FFP_MSG_VIDEO_RENDERING_START:
+            pthread_mutex_lock(&mp->mutex);
+            if (mp->play_start_timestamp==0) {
+                mp->play_start_timestamp = av_gettime();
+            }
+            MPTRACE("ijkmp_get_msg: FFP_MSG_AUDIO/VIDEO_RENDERING_START, timestamp=%lld\n", mp->play_start_timestamp/1000);
+            pthread_mutex_unlock(&mp->mutex);
+            break;
         }
-        if (continue_wait_next_msg) {
-            msg_free_res(msg);
+
+        if (continue_wait_next_msg)
             continue;
-        }
 
         return retval;
     }
 
     return -1;
 }
+
+int ijkmp_create_rsa_keys(int bits, const char* seed, char** private_key,  char** public_key){
+    return ff_create_rsa_keys(bits, seed, private_key, public_key);
+}
+
+int ijkmp_rsa_decrypt( const char* seed, const char* private_key, const char* src, char** dst ){
+    return ff_rsa_decrypt(seed, private_key, src, dst);
+}
+

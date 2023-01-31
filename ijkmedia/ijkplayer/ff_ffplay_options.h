@@ -115,6 +115,8 @@ static const AVOption ffp_context_options[] = {
 
     { "start-on-prepared",                  "automatically start playing on prepared",
         OPTION_OFFSET(start_on_prepared),   OPTION_INT(1, 0, 1) },
+    
+    { "render-on-start", "automatically start download and render on start ",  OPTION_OFFSET(render_on_start),   OPTION_INT(1, 0, 1) },
 
     { "video-pictq-size",                   "max picture queue frame count",
         OPTION_OFFSET(pictq_size),          OPTION_INT(VIDEO_PICTURE_QUEUE_SIZE_DEFAULT,
@@ -123,6 +125,8 @@ static const AVOption ffp_context_options[] = {
 
     { "max-buffer-size",                    "max buffer size should be pre-read",
         OPTION_OFFSET(dcc.max_buffer_size), OPTION_INT(MAX_QUEUE_SIZE, 0, MAX_QUEUE_SIZE) },
+    { "max-buffer-time",                    "max buffer time should be pre-read",
+        OPTION_OFFSET(dcc.max_buffer_time), OPTION_INT(0, 0, MAX_QUEUE_TIME) },
     { "min-frames",                         "minimal frames to stop pre-reading",
         OPTION_OFFSET(dcc.min_frames),      OPTION_INT(DEFAULT_MIN_FRAMES, MIN_MIN_FRAMES, MAX_MIN_FRAMES) },
     { "first-high-water-mark-ms",           "first chance to wakeup read_thread",
@@ -206,6 +210,25 @@ static const AVOption ffp_context_options[] = {
         OPTION_OFFSET(ijkmeta_delay_init),      OPTION_INT(0, 0, 1) },
     { "render-wait-start",          "render wait start",
         OPTION_OFFSET(render_wait_start),      OPTION_INT(0, 0, 1) },
+    { "post_start_log",                     "post start log",
+        OPTION_OFFSET(post_start_log),      OPTION_INT(0, 0, 1) },
+
+    { "star_DNS_set",                       "set DNS ",
+    	OPTION_OFFSET(star_DNS_set),        OPTION_STR(NULL)  },
+
+    { "min_start_seek_remaining_time",                       "min_start_seek_remaining_time ",
+        OPTION_OFFSET(min_start_seek_remaining_time),      OPTION_INT(0, 0, INT_MAX) },
+    
+     
+    { "force-refresh", "force refresh showing image", OPTION_OFFSET(force_refresh),      OPTION_INT(0, 0, 1) },
+    { "audio_track", "audio stream language", OPTION_OFFSET(audio_track),  OPTION_STR(NULL) },
+    //priority language list format example: "eng;fre;"
+    { "audio_track_priority_list", "audio stream language priority list", OPTION_OFFSET(audio_track_priority_list),  OPTION_STR(NULL) },
+    { "tcp_rwtimeout", "tcp read timeout after show", OPTION_OFFSET(tcp_rwtimeout),  OPTION_INT(0, 0, 60000000) },
+    { "adaptive-bitrate-switching", "adaptive bitrate switching", OPTION_OFFSET(adaptive_bitrate_switching), OPTION_INT(0, 0, 1) },
+    { "cache-switching", "cache switching", OPTION_OFFSET(cache_switching), OPTION_INT(0, 0, 1) },
+    { "cache-path", "", OPTION_OFFSET(cache_path),  OPTION_STR(NULL) },
+    { "pre-redirected", "open by pre redirect url", OPTION_OFFSET(pre_redirected), OPTION_INT(0, 0, 1) },
     { NULL }
 };
 

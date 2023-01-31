@@ -2,7 +2,6 @@
  * ff_cmdutils.c
  *      based on ffmpeg/cmdutils.c
  *
- * Copyright (c) 2000-2003 Bilibili
  * Copyright (c) 2000-2003 Fabrice Bellard
  * Copyright (c) 2013 Zhang Rui <bbcallen@gmail.com>
  *
@@ -77,7 +76,7 @@ void print_error(const char *filename, int err)
 
     if (av_strerror(err, errbuf, sizeof(errbuf)) < 0)
         errbuf_ptr = strerror(AVUNERROR(err));
-    av_log(NULL, AV_LOG_ERROR, "%s: %s\n", filename, errbuf_ptr);
+    av_log(NULL, AV_LOG_ERROR, "fail to play %s: %s[%d]\n", filename, errbuf_ptr, err);
 }
 
 // MERGE: warned_cfg

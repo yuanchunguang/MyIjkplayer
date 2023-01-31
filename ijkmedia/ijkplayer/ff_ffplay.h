@@ -61,6 +61,7 @@ int       ffp_prepare_async_l(FFPlayer *ffp, const char *file_name);
 int       ffp_start_from_l(FFPlayer *ffp, long msec);
 int       ffp_start_l(FFPlayer *ffp);
 int       ffp_pause_l(FFPlayer *ffp);
+int       ffp_is_pause_req(FFPlayer *ffp);
 int       ffp_is_paused_l(FFPlayer *ffp);
 int       ffp_stop_l(FFPlayer *ffp);
 int       ffp_wait_stop_l(FFPlayer *ffp);
@@ -68,8 +69,10 @@ int       ffp_wait_stop_l(FFPlayer *ffp);
 /* all in milliseconds */
 int       ffp_seek_to_l(FFPlayer *ffp, long msec);
 long      ffp_get_current_position_l(FFPlayer *ffp);
+long      ffp_get_current_position_l2(FFPlayer *ffp, int* is_seekpos);
 long      ffp_get_duration_l(FFPlayer *ffp);
 long      ffp_get_playable_duration_l(FFPlayer *ffp);
+long      ffp_get_played_duration_l(FFPlayer *ffp);
 void      ffp_set_loop(FFPlayer *ffp, int loop);
 int       ffp_get_loop(FFPlayer *ffp);
 
@@ -96,9 +99,11 @@ void      ffp_toggle_buffering_l(FFPlayer *ffp, int start_buffering);
 void      ffp_toggle_buffering(FFPlayer *ffp, int start_buffering);
 void      ffp_check_buffering_l(FFPlayer *ffp);
 void      ffp_track_statistic_l(FFPlayer *ffp, AVStream *st, PacketQueue *q, FFTrackCacheStatistic *cache);
+void 	  ffp_track_statistic_withq_l(FFPlayer *ffp, AVStream *st, PacketQueue *q, FrameQueue *frameq, FFTrackCacheStatistic *cache);
 void      ffp_audio_statistic_l(FFPlayer *ffp);
 void      ffp_video_statistic_l(FFPlayer *ffp);
 void      ffp_statistic_l(FFPlayer *ffp);
+int       ffp_image_refresh_l(FFPlayer *ffp);
 
 int       ffp_video_thread(FFPlayer *ffp);
 
@@ -115,6 +120,11 @@ float     ffp_get_property_float(FFPlayer *ffp, int id, float default_value);
 void      ffp_set_property_float(FFPlayer *ffp, int id, float value);
 int64_t   ffp_get_property_int64(FFPlayer *ffp, int id, int64_t default_value);
 void      ffp_set_property_int64(FFPlayer *ffp, int id, int64_t value);
+
+void   ffp_update_predns(FFPlayer *ffp, const char* uri);
+
+int   ffp_get_start_error_code(FFPlayer *ffp);
+int   ffp_get_start_error_code_ex(FFPlayer *ffp);
 
 // must be freed with free();
 struct IjkMediaMeta *ffp_get_meta_l(FFPlayer *ffp);
