@@ -7,6 +7,8 @@ HEADERS = avformat.h                                                    \
           avc.h                                                         \
           url.h                                                         \
           internal.h                                                    \
+          global_variables.h                                            \
+          bitrate_adapter.h                                             \
           avio_internal.h                                               \
           flv.h                                                         \
           id3v2.h                                                       \
@@ -33,6 +35,8 @@ OBJS = allformats.o         \
        utils.o              \
        avc.o                \
        ijkutils.o           \
+       global_variables.o   \
+       bitrate_adapter.o    \
 
 OBJS-$(HAVE_LIBC_MSVCRT)                 += file_open.o
 

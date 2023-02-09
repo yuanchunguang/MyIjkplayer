@@ -30,9 +30,15 @@
 #include "network.h"
 #endif
 #include "url.h"
-
+#include "bitrate_adapter.h"
+#include "libavutil/base64.h"
+#include "internal.h"
+#include "global_variables.h"
 /** @name Logging context. */
 /*@{*/
+
+#define MAX_ARGS_INFO_LEN 10240
+
 static const char *urlcontext_to_name(void *ptr)
 {
     URLContext *h = (URLContext *)ptr;
@@ -103,6 +109,8 @@ static int url_alloc_for_protocol(URLContext **puc, const URLProtocol *up,
     uc->flags           = flags;
     uc->is_streamed     = 0; /* default = not streamed */
     uc->max_packet_size = 0; /* default: stream file */
+    
+    //init priv_data of URLContext by priv_data_size of URLProtocol
     if (up->priv_data_size) {
         uc->priv_data = av_mallocz(up->priv_data_size);
         if (!uc->priv_data) {
@@ -179,12 +187,12 @@ int ffurl_connect(URLContext *uc, AVDictionary **options)
                (uc->protocol_blacklist && !strcmp(uc->protocol_blacklist, e->value)));
 
     if (uc->protocol_whitelist && av_match_list(uc->prot->name, uc->protocol_whitelist, ',') <= 0) {
-        av_log(uc, AV_LOG_ERROR, "Protocol '%s' not on whitelist '%s'!\n", uc->prot->name, uc->protocol_whitelist);
+        av_log(uc, AV_LOG_ERROR, "Protocol not on whitelist \'%s\'!\n", uc->protocol_whitelist);
         return AVERROR(EINVAL);
     }
 
     if (uc->protocol_blacklist && av_match_list(uc->prot->name, uc->protocol_blacklist, ',') > 0) {
-        av_log(uc, AV_LOG_ERROR, "Protocol '%s' on blacklist '%s'!\n", uc->prot->name, uc->protocol_blacklist);
+        av_log(uc, AV_LOG_ERROR, "Protocol blacklisted \'%s\'!\n", uc->protocol_blacklist);
         return AVERROR(EINVAL);
     }
 
@@ -263,6 +271,8 @@ static const struct URLProtocol *url_find_protocol(const char *filename)
         av_strlcpy(proto_str, filename,
                    FFMIN(proto_len + 1, sizeof(proto_str)));
 
+    if ((ptr = strchr(proto_str, ',')))
+        *ptr = '\0';
     av_strlcpy(proto_nested, proto_str, sizeof(proto_nested));
     if ((ptr = strchr(proto_nested, '+')))
         *ptr = '\0';
@@ -297,11 +307,77 @@ int ffurl_alloc(URLContext **puc, const char *filename, int flags,
        return url_alloc_for_protocol(puc, p, filename, flags, int_cb);
 
     *puc = NULL;
-    if (av_strstart(filename, "https:", NULL) || av_strstart(filename, "tls:", NULL))
+    if (av_strstart(filename, "https:", NULL))
         av_log(NULL, AV_LOG_WARNING, "https protocol not found, recompile FFmpeg with "
                                      "openssl, gnutls "
                                      "or securetransport enabled.\n");
     return AVERROR_PROTOCOL_NOT_FOUND;
+}
+
+static void parse_av_split_info(AVApplicationContext *app_ctx, URLContext *h){
+	if(app_ctx == NULL || h == NULL){
+		return;
+	}
+	
+	int parse_av_split_info_success = 0;
+	char *split_av_info = NULL;
+	uint8_t *out_info = NULL;
+	
+	do{
+		ff_get_player_option(app_ctx, OPT_SPLIT_AV_INFO, &split_av_info);
+		
+		if(split_av_info == NULL)
+			break;
+		
+		url_args_org args;
+		memset(&args, 0, sizeof(args));
+		
+		ff_parse_key_value_ex(split_av_info, '&', handle_url_args, &args);
+		int out_size = strlen(args.info)*2;
+		out_info = av_mallocz(out_size);
+		memset(out_info, 0, out_size);
+
+		int out_len = av_base64_decode_urlsafe(out_info, args.info, out_size);
+		if (out_len < 0) {
+			av_log(h, AV_LOG_WARNING, "Invalid base64 decode url info param, info=%s, ret=%d\n", args.info, out_len);
+			av_freep(&h->args.info);
+			break;
+		}
+
+		if (0==strcmp(args.gzip, "on")) {
+			h->args.info = av_mallocz(MAX_ARGS_INFO_LEN);
+			h->args.info_len = MAX_ARGS_INFO_LEN;
+			out_len = av_zlib_decompress(out_info, out_len, h->args.info, h->args.info_len);
+			if (out_len<=0){
+				av_log(h, AV_LOG_WARNING, "Invalid unzip url info param, ret=%d\n", out_len);
+				av_freep(&h->args.info);
+				break;
+			}else{
+				h->args.info_len = out_len;
+			}
+			
+			//avoid a string end is wrong.
+			if( h->args.info != NULL && h->args.info_len < MAX_ARGS_INFO_LEN && h->args.info[h->args.info_len] != '\0' )
+			{
+				h->args.info[h->args.info_len] = '\0';
+			}
+		}else{
+			h->args.info = av_mallocz(out_len+1);
+			h->args.info_len = out_len+1;
+			av_strlcpy(h->args.info, out_info, h->args.info_len);
+		}
+		
+		av_strlcpy(h->args.lang, args.lang, sizeof(h->args.lang));
+		parse_av_split_info_success = 1;
+	}while(0);
+	
+	if(split_av_info)
+		av_free(split_av_info);
+	
+	if(out_info)
+		av_free(out_info);
+	
+	startimes_start_log(app_ctx, STAR_TIME_LOG_MAIN, "parse_av_split_info_success = %d", parse_av_split_info_success);
 }
 
 int ffurl_open_whitelist(URLContext **puc, const char *filename, int flags,
@@ -309,7 +385,9 @@ int ffurl_open_whitelist(URLContext **puc, const char *filename, int flags,
                          const char *whitelist, const char* blacklist,
                          URLContext *parent)
 {
-    AVDictionary *tmp_opts = NULL;
+    //bitrate_begin_calculate();
+    
+	AVDictionary *tmp_opts = NULL;
     AVDictionaryEntry *e;
     int ret = ffurl_alloc(puc, filename, flags, int_cb);
     if (ret < 0)
@@ -319,6 +397,14 @@ int ffurl_open_whitelist(URLContext **puc, const char *filename, int flags,
     if (options &&
         (ret = av_opt_set_dict(*puc, options)) < 0)
         goto fail;
+    
+    //set user options to priv_data of URLContext, such as HTTPContext, TCPContext
+    AVDictionaryEntry *app_ctx_opt = av_dict_get(*options, "ijkapplication", NULL, AV_DICT_MATCH_CASE);
+    AVApplicationContext * app_ctx = NULL;
+    if (app_ctx_opt) {
+        app_ctx = (int64_t)(intptr_t)strtoll(app_ctx_opt->value, NULL, 10);
+    }
+    
     if (options && (*puc)->prot->priv_data_class &&
         (ret = av_opt_set_dict((*puc)->priv_data, options)) < 0)
         goto fail;
@@ -341,9 +427,17 @@ int ffurl_open_whitelist(URLContext **puc, const char *filename, int flags,
 
     if ((ret = av_opt_set_dict(*puc, options)) < 0)
         goto fail;
-
+	
+    URLContext* h = *puc;
+	if (app_ctx 
+		&& (app_ctx->pss->parse_av_split_info_complete != 1)
+	    && app_ctx->pss->media_type == AV_SEPARATE 
+		&& h ){
+		parse_av_split_info(app_ctx, h);
+		app_ctx->pss->parse_av_split_info_complete = 1;
+	}
+	
     ret = ffurl_connect(*puc, options);
-
     if (!ret)
         return 0;
 fail:
@@ -355,7 +449,7 @@ fail:
 int ffurl_open(URLContext **puc, const char *filename, int flags,
                const AVIOInterruptCB *int_cb, AVDictionary **options)
 {
-    return ffurl_open_whitelist(puc, filename, flags,
+	return ffurl_open_whitelist(puc, filename, flags,
                                 int_cb, options, NULL, NULL, NULL);
 }
 
@@ -370,6 +464,21 @@ static inline int retry_transfer_wrapper(URLContext *h, uint8_t *buf,
     int64_t wait_since = 0;
 
     len = 0;
+
+    if(h->args.info){
+        if( h->args.binfo == 1 )
+            return AVERROR_EOF;
+        
+        av_strlcpy(buf, h->args.info, size);
+        len = strlen(buf);
+        
+        if( h->args.binfo == 0 )
+        {
+            h->args.binfo = 1;
+        }
+        return len;
+    }
+    
     while (len < size_min) {
         if (ff_check_interrupt(&h->interrupt_callback))
             return AVERROR_EXIT;
@@ -391,8 +500,10 @@ static inline int retry_transfer_wrapper(URLContext *h, uint8_t *buf,
                 }
                 av_usleep(1000);
             }
-        } else if (ret < 1)
-            return (ret < 0 && ret != AVERROR_EOF) ? ret : len;
+        } else if (ret == AVERROR_EOF)
+            return (len > 0) ? len : AVERROR_EOF;
+        else if (ret < 0)
+            return ret;
         if (ret) {
             fast_retries = FFMAX(fast_retries, 2);
             wait_since = 0;
@@ -441,13 +552,18 @@ int64_t ffurl_seek(URLContext *h, int64_t pos, int whence)
 
 int ffurl_closep(URLContext **hh)
 {
+    
     URLContext *h= *hh;
     int ret = 0;
     if (!h)
         return 0;     /* can happen when ffurl_open fails */
-
+    char filename[1024];
+    memset(filename, 0 , sizeof(filename));
+    sprintf(filename, "%s", h->filename);
+    av_log(NULL, AV_LOG_INFO, "close url context begin, url=%s\n", filename);
     if (h->is_connected && h->prot->url_close)
         ret = h->prot->url_close(h);
+
 #if CONFIG_NETWORK
     if (h->prot->flags & URL_PROTOCOL_FLAG_NETWORK)
         ff_network_close();
@@ -458,12 +574,15 @@ int ffurl_closep(URLContext **hh)
         av_freep(&h->priv_data);
     }
     av_opt_free(h);
+    av_freep(&h->args.info);
     av_freep(hh);
+    av_log(NULL, AV_LOG_INFO, "close url context end, url=%s\n", filename);
     return ret;
 }
 
 int ffurl_close(URLContext *h)
 {
+	//bitrate_finish_calculate();
     return ffurl_closep(&h);
 }
 
@@ -623,7 +742,7 @@ int64_t ffurl_size(URLContext *h)
 
 int ffurl_get_file_handle(URLContext *h)
 {
-    if (!h || !h->prot || !h->prot->url_get_file_handle)
+    if (!h->prot->url_get_file_handle)
         return -1;
     return h->prot->url_get_file_handle(h);
 }
@@ -654,8 +773,8 @@ int ffurl_get_short_seek(URLContext *h)
 
 int ffurl_shutdown(URLContext *h, int flags)
 {
-    if (!h || !h->prot || !h->prot->url_shutdown)
-        return AVERROR(ENOSYS);
+    if (!h->prot->url_shutdown)
+        return AVERROR(EINVAL);
     return h->prot->url_shutdown(h, flags);
 }
 

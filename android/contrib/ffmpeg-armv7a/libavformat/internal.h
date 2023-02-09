@@ -31,7 +31,7 @@
 
 /** size of probe buffer, for guessing file type from file contents */
 #define PROBE_BUF_MIN 2048
-#define PROBE_BUF_MAX (1 << 20)
+#define PROBE_BUF_MAX (1 << 20)  //1MB
 
 #define MAX_PROBE_PACKETS 2500
 
@@ -120,6 +120,11 @@ struct AVFormatInternal {
 
     int avoid_negative_ts_use_pts;
 
+    /**
+     * Whether or not a header has already been written
+     */
+    int header_written;
+    int write_header_ret;
     /**
      * Timestamp of the end of the shortest stream.
      */
@@ -361,6 +366,9 @@ typedef void (*ff_parse_key_val_cb)(void *context, const char *key,
 void ff_parse_key_value(const char *str, ff_parse_key_val_cb callback_get_buf,
                         void *context);
 
+void ff_parse_key_value_ex(const char *str, char spliter, ff_parse_key_val_cb callback_get_buf,
+                        void *context);
+
 /**
  * Find stream index based on format-specific stream ID
  * @return stream index, or < 0 on error
@@ -577,11 +585,8 @@ static inline int ff_rename(const char *oldpath, const char *newpath, void *logc
     int ret = 0;
     if (rename(oldpath, newpath) == -1) {
         ret = AVERROR(errno);
-        if (logctx) {
-            char err[AV_ERROR_MAX_STRING_SIZE] = {0};
-            av_make_error_string(err, AV_ERROR_MAX_STRING_SIZE, ret);
-            av_log(logctx, AV_LOG_ERROR, "failed to rename file %s to %s: %s\n", oldpath, newpath, err);
-        }
+        if (logctx)
+            av_log(logctx, AV_LOG_ERROR, "failed to rename file %s to %s\n", oldpath, newpath);
     }
     return ret;
 }
@@ -632,7 +637,7 @@ enum AVWriteUncodedFrameFlags {
 /**
  * Copies the whilelists from one context to the other
  */
-int ff_copy_whiteblacklists(AVFormatContext *dst, const AVFormatContext *src);
+int ff_copy_whiteblacklists(AVFormatContext *dst,const AVFormatContext *src);
 
 int ffio_open2_wrapper(struct AVFormatContext *s, AVIOContext **pb, const char *url, int flags,
                        const AVIOInterruptCB *int_cb, AVDictionary **options);
@@ -780,5 +785,17 @@ int ff_packet_list_get(AVPacketList **head, AVPacketList **tail,
 void ff_packet_list_free(AVPacketList **head, AVPacketList **tail);
 
 void avpriv_register_devices(const AVOutputFormat * const o[], const AVInputFormat * const i[]);
+
+/**
+ * Find the next packet in the interleaving queue for the given stream.
+ * The packet is not removed from the interleaving queue, but only
+ * a pointer to it is returned.
+ *
+ * @param ts_offset the ts difference between packet in the que and the muxer.
+ *
+ * @return a pointer to the next packet, or NULL if no packet is queued
+ *         for this stream.
+ */
+//const AVPacket *ff_interleaved_peek(AVFormatContext *s, int stream, int64_t *ts_offset);
 
 #endif /* AVFORMAT_INTERNAL_H */

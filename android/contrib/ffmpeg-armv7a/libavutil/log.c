@@ -39,9 +39,12 @@
 #include "common.h"
 #include "internal.h"
 #include "log.h"
-#include "thread.h"
+#include "libavutil/application.h"
 
-static AVMutex mutex = AV_MUTEX_INITIALIZER;
+#if HAVE_PTHREADS
+#include <pthread.h>
+static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+#endif
 
 #define LINE_SZ 1024
 
@@ -54,8 +57,9 @@ static AVMutex mutex = AV_MUTEX_INITIALIZER;
 static int av_log_level = AV_LOG_INFO;
 static int flags;
 
+
 #define NB_LEVELS 8
-#if defined(_WIN32) && HAVE_SETCONSOLETEXTATTRIBUTE
+#if defined(_WIN32) && !defined(__MINGW32CE__) && HAVE_SETCONSOLETEXTATTRIBUTE
 #include <windows.h>
 static const uint8_t color[16 + AV_CLASS_CATEGORY_NB] = {
     [AV_LOG_PANIC  /8] = 12,
@@ -120,9 +124,11 @@ static const uint32_t color[16 + AV_CLASS_CATEGORY_NB] = {
 #endif
 static int use_color = -1;
 
+#define TCP_CONNECTION_LOG_SIZE  256
+
 static void check_color_terminal(void)
 {
-#if defined(_WIN32) && HAVE_SETCONSOLETEXTATTRIBUTE
+#if defined(_WIN32) && !defined(__MINGW32CE__) && HAVE_SETCONSOLETEXTATTRIBUTE
     CONSOLE_SCREEN_BUFFER_INFO con_info;
     con = GetStdHandle(STD_ERROR_HANDLE);
     use_color = (con != INVALID_HANDLE_VALUE) && !getenv("NO_COLOR") &&
@@ -157,7 +163,7 @@ static void colored_fputs(int level, int tint, const char *str)
     if (level == AV_LOG_INFO/8) local_use_color = 0;
     else                        local_use_color = use_color;
 
-#if defined(_WIN32) && HAVE_SETCONSOLETEXTATTRIBUTE
+#if defined(_WIN32) && !defined(__MINGW32CE__) && HAVE_SETCONSOLETEXTATTRIBUTE
     if (local_use_color)
         SetConsoleTextAttribute(con, background | color[level]);
     fputs(str, stderr);
@@ -166,19 +172,19 @@ static void colored_fputs(int level, int tint, const char *str)
 #else
     if (local_use_color == 1) {
         fprintf(stderr,
-                "\033[%"PRIu32";3%"PRIu32"m%s\033[0m",
+                "\033[%d;3%dm%s\033[0m",
                 (color[level] >> 4) & 15,
                 color[level] & 15,
                 str);
     } else if (tint && use_color == 256) {
         fprintf(stderr,
-                "\033[48;5;%"PRIu32"m\033[38;5;%dm%s\033[0m",
+                "\033[48;5;%dm\033[38;5;%dm%s\033[0m",
                 (color[level] >> 16) & 0xff,
                 tint,
                 str);
     } else if (local_use_color == 256) {
         fprintf(stderr,
-                "\033[48;5;%"PRIu32"m\033[38;5;%"PRIu32"m%s\033[0m",
+                "\033[48;5;%dm\033[38;5;%dm%s\033[0m",
                 (color[level] >> 16) & 0xff,
                 (color[level] >> 8) & 0xff,
                 str);
@@ -266,10 +272,10 @@ static void format_line(void *avcl, int level, const char *fmt, va_list vl,
         av_bprintf(part+1, "[%s @ %p] ",
                  avc->item_name(avcl), avcl);
         if(type) type[1] = get_category(avcl);
-    }
 
-    if (*print_prefix && (level > AV_LOG_QUIET) && (flags & AV_LOG_PRINT_LEVEL))
-        av_bprintf(part+2, "[%s] ", get_level_str(level));
+        if (flags & AV_LOG_PRINT_LEVEL)
+            av_bprintf(part+2, "[%s] ", get_level_str(level));
+    }
 
     av_vbprintf(part+3, fmt, vl);
 
@@ -315,7 +321,9 @@ void av_log_default_callback(void* ptr, int level, const char* fmt, va_list vl)
 
     if (level > av_log_level)
         return;
-    ff_mutex_lock(&mutex);
+#if HAVE_PTHREADS
+    pthread_mutex_lock(&mutex);
+#endif
 
     format_line(ptr, level, fmt, vl, part, &print_prefix, type);
     snprintf(line, sizeof(line), "%s%s%s%s", part[0].str, part[1].str, part[2].str, part[3].str);
@@ -352,12 +360,17 @@ void av_log_default_callback(void* ptr, int level, const char* fmt, va_list vl)
 #endif
 end:
     av_bprint_finalize(part+3, NULL);
-    ff_mutex_unlock(&mutex);
+#if HAVE_PTHREADS
+    pthread_mutex_unlock(&mutex);
+#endif
 }
 
 static void (*av_log_callback)(void*, int, const char*, va_list) =
     av_log_default_callback;
-
+//zy add
+static void (*star_log_callback)(void*, int, const char*, va_list) =
+    av_log_default_callback;
+///////////////////////////////////
 void av_log(void* avcl, int level, const char *fmt, ...)
 {
     AVClass* avc = avcl ? *(AVClass **) avcl : NULL;
@@ -369,14 +382,121 @@ void av_log(void* avcl, int level, const char *fmt, ...)
     av_vlog(avcl, level, fmt, vl);
     va_end(vl);
 }
+//zy add
+void startimes_error_log(void* app_ctx, int level, const char *fmt, ...)
+{
+    /*AVClass* avc = avcl ? *(AVClass **) avcl : NULL;
+    va_list vl;
+    int av_level=AV_LOG_INFO;
+    va_start(vl, fmt);
+    if (avc && avc->version >= (50 << 16 | 15 << 8 | 2) &&
+        avc->log_level_offset_offset && av_level >= AV_LOG_FATAL)
+        av_level += *(int *) (((uint8_t *) avcl) + avc->log_level_offset_offset);*/
+//    char new_string[1024]="STAR_START_ERROR_LOG:";
+//    switch(level){
+//    case 0:
+//    	strcat(new_string,"0");
+//    	break;
+//    case 1:
+//        strcat(new_string,"1");
+//        break;
+//    }
+    AVApplicationContext *ctx = (AVApplicationContext *)app_ctx;
+    va_list vl;
+    int av_level=AV_LOG_INFO;
+    va_start(vl, fmt);
+    
+    char new_string[LINE_SZ]={0};
+    sprintf( new_string, "STAR_START_ERROR_LOG:%d", level);
+    
+    char count_string[32]={0};
+    //sprintf(count_string,":%d:",ctx->lss->start_error_log_count);
+	sprintf(count_string,":%d:",0);
+    strcat(new_string,count_string);
+    //ctx->lss->start_error_log_count++;
+    strcat(new_string,fmt);
+    star_vlog(app_ctx, av_level, new_string, vl);
+    va_end(vl);
+}
 
+void startimes_start_log(void* app_ctx, int level, const char *fmt, ...)
+{
+	//startimes_error_log(avcl, level, fmt, ...);
+    /*AVClass* avc = avcl ? *(AVClass **) avcl : NULL;
+    va_list vl;
+    int av_level=AV_LOG_INFO;
+    va_start(vl, fmt);
+    if (avc && avc->version >= (50 << 16 | 15 << 8 | 2) &&
+        avc->log_level_offset_offset && av_level >= AV_LOG_FATAL)
+        av_level += *(int *) (((uint8_t *) avcl) + avc->log_level_offset_offset);*/
+//    char new_string[1024]="STAR_START_TIME_LOG:";
+//    switch(level){
+//    case 0:
+//    	strcat(new_string,"0");
+//    	break;
+//    case 1:
+//        strcat(new_string,"1");
+//        break;
+//    }
+    AVApplicationContext *ctx = (AVApplicationContext *)app_ctx;
+    va_list vl;
+    int av_level=AV_LOG_INFO;
+    va_start(vl, fmt);
+    char new_string[LINE_SZ]={0};
+    sprintf( new_string, "STAR_START_TIME_LOG:%d", level);
+    char count_string[32]={0};
+    //sprintf(count_string,":%d:",ctx->lss->start_time_log_count);
+    strcat(new_string,":0:");
+    //ctx->lss->start_time_log_count++;
+    strcat(new_string,fmt);
+    star_vlog(app_ctx, av_level, new_string, vl);
+    va_end(vl);
+}
+
+void startimes_play_log(void* app_ctx, int level, const char*tag, const char *fmt, ...)
+{
+    //startimes_error_log(avcl, level, fmt, ...);
+    /*AVClass* avc = avcl ? *(AVClass **) avcl : NULL;
+    va_list vl;
+    int av_level=AV_LOG_INFO;
+    va_start(vl, fmt);
+    if (avc && avc->version >= (50 << 16 | 15 << 8 | 2) &&
+        avc->log_level_offset_offset && av_level >= AV_LOG_FATAL)
+        av_level += *(int *) (((uint8_t *) avcl) + avc->log_level_offset_offset);*/
+    va_list vl;
+    int av_level=AV_LOG_INFO;
+    va_start(vl, fmt);
+    
+    if (level == STAR_TIME_LOG_FLOW_LOG) {
+        star_vlog(app_ctx, av_level, fmt, vl);
+        va_end(vl);
+    }
+    else
+    {
+        char new_string[LINE_SZ]={0};
+        sprintf( new_string, "%s:%d:", tag, level);
+        strcat(new_string,fmt);
+        star_vlog(app_ctx, av_level, new_string, vl);
+        va_end(vl);
+    }
+}
+
+
+////////////////////
 void av_vlog(void* avcl, int level, const char *fmt, va_list vl)
 {
     void (*log_callback)(void*, int, const char*, va_list) = av_log_callback;
     if (log_callback)
         log_callback(avcl, level, fmt, vl);
 }
-
+// zy add
+void star_vlog(void* app_ctx, int level, const char *fmt, va_list vl)
+{
+    void (*log_callback)(void*, int, const char*, va_list) = star_log_callback;
+    if (log_callback)
+        log_callback(app_ctx, level, fmt, vl);
+}
+//////////////////////////////////////
 int av_log_get_level(void)
 {
     return av_log_level;
@@ -401,7 +521,12 @@ void av_log_set_callback(void (*callback)(void*, int, const char*, va_list))
 {
     av_log_callback = callback;
 }
-
+//zy add
+void star_log_set_callback(void (*callback)(void*, int, const char*, va_list))
+{
+    star_log_callback = callback;
+}
+//////////////////////////////
 static void missing_feature_sample(int sample, void *avc, const char *msg,
                                    va_list argument_list)
 {
@@ -432,4 +557,251 @@ void avpriv_report_missing_feature(void *avc, const char *msg, ...)
     va_start(argument_list, msg);
     missing_feature_sample(0, avc, msg, argument_list);
     va_end(argument_list);
+}
+
+void add_flow_log_str(void *app_ctx, void *uss, enum FLOW_LOG type, const char *data)
+{
+    AVApplicationContext* ctx = (AVApplicationContext *)app_ctx;
+	URLStartStatus* puss = (URLStartStatus*)uss;
+	
+    if (!ctx || !puss)
+        return;
+	
+	FlowLogStatus *pfls = puss->fls;
+    
+    memset(pfls->flow_log_info,0,FLOW_LOG_SIZE);
+    if (type==FL_FILE)
+    {
+        char* pfile = strrchr(data, '/');
+        if (pfile==NULL) {
+            return;
+        }
+        
+        if (strlen(pfile+1) > (FLOW_LOG_SIZE - 10))
+        {
+            av_log(NULL, AV_LOG_WARNING,"add_flow_log_str:FL_FILE is longer than 1024\n");
+            pfls->flow_log_need_send=0;
+            return;
+        }
+        char ctemp[1024];
+        sprintf(ctemp,"\"file\":\"%s\"",pfile+1);
+        strcat(pfls->flow_log_info,ctemp);
+        pfls->flow_log_need_send=1;
+    }
+}
+
+static int add_flow_log_combine(FlowLogStatus *pfls,const char *ctemp)
+{
+    if ((strlen(pfls->flow_log_info) + strlen(ctemp)) < (FLOW_LOG_SIZE - strlen(LOG_TAG_PLAY_FLOW_LOG) -3))  //3 is include '\0' ',' '='
+    {
+        //sprintf(flow_log_info,"%s,%s",flow_log_info,ctemp);
+        strcat(pfls->flow_log_info,",");
+        strcat(pfls->flow_log_info,ctemp);
+        return 1;
+    }
+    else
+    {
+        av_log(NULL, AV_LOG_WARNING,"add_flow_log_combine: flow log size over flow\n");
+        pfls->flow_log_need_send=0;
+        return 0;
+    }
+}
+
+void add_flow_log_string(void *app_ctx, void *uss, enum FLOW_LOG type, const char *data){
+    AVApplicationContext *ctx = (AVApplicationContext *)app_ctx;
+    URLStartStatus* puss = (URLStartStatus*)uss;
+	
+    if (!ctx || !puss)
+        return;
+	
+	FlowLogStatus *pfls = puss->fls;
+    
+    if (data==NULL||strlen(data)==0) {
+        return;
+    }
+	
+    char ctemp[FLOW_LOG_SIZE]={0};
+    switch (type) {
+        case FL_TCP_CONNECTIONS:
+            sprintf(ctemp,"\"tcp_connect_logs\":[%s]",data);
+            add_flow_log_combine(pfls,ctemp);
+            break;
+    }
+}
+
+void add_flow_log(void *app_ctx, void *uss, enum FLOW_LOG type, int64_t data)
+{
+    AVApplicationContext *ctx = (AVApplicationContext *)app_ctx;
+    URLStartStatus* puss = (URLStartStatus*)uss;
+	
+    if (!ctx || !puss)
+        return;
+	
+	FlowLogStatus *pfls = puss->fls;
+    
+    char ctemp[1024];
+    switch (type) {
+        case FL_FILE_SIZE:
+            sprintf(ctemp,"\"file_size\":%lld",data);
+            add_flow_log_combine(pfls,ctemp);
+            break;
+        case FL_DNS_USE_PRE:
+            sprintf(ctemp,"\"dns_use_pre\":%lld",data);
+            add_flow_log_combine(pfls,ctemp);
+            break;
+        case FL_DOWNLOAD_BEGIN:
+            sprintf(ctemp,"\"download_begin\":%lld",data);
+            sprintf(pfls->flow_log_info,"%s,%s",pfls->flow_log_info,ctemp);
+            break;
+        case FL_DNS_BEGIN:
+            sprintf(ctemp,"\"dns_begin\":%lld",data);
+            add_flow_log_combine(pfls,ctemp);
+            break;
+        case FL_DNS_FINISH:
+            sprintf(ctemp,"\"dns_finish\":%lld",data);
+            add_flow_log_combine(pfls,ctemp);
+            break;
+        case FL_TCP_CONNECT_BEGIN:
+            sprintf(ctemp,"\"tcp_connect_begin\":%lld",data);
+            add_flow_log_combine(pfls,ctemp);
+            break;
+        case FL_TCP_CONNECT_FINISH:
+            sprintf(ctemp,"\"tcp_connect_finish\":%lld",data);
+            add_flow_log_combine(pfls,ctemp);
+            break;
+        case FL_HTTP_RESPONSE:
+            sprintf(ctemp,"\"http_response\":%lld",data);
+            add_flow_log_combine(pfls,ctemp);
+            break;
+        case FL_DOWNLOAD_FINISH:
+            sprintf(ctemp,"\"download_finish\":%lld",data);
+            add_flow_log_combine(pfls,ctemp);
+            if (1 == pfls->flow_log_need_send)
+            {
+                //av_log(NULL, AV_LOG_INFO,"PLAY_FLOW_LOG:%s\n",pfls->flow_log_info);
+                pfls->flow_log_need_send=0;
+                startimes_play_log(app_ctx,STAR_TIME_LOG_FLOW_LOG,LOG_TAG_PLAY_FLOW_LOG,"PLAY_FLOW_LOG=%s",pfls->flow_log_info);
+            }
+            break;
+        case FL_HTTP_RESPONSE_CODE:
+            sprintf(ctemp,"\"http_response_code\":%lld",data);
+            add_flow_log_combine(pfls,ctemp);
+            break;
+        case FL_DOWNLOAD_ERROR_CODE:
+            sprintf(ctemp,"\"error_code\":%lld",data);
+            add_flow_log_combine(pfls,ctemp);
+            break;
+        case FL_TCP_READ_ERROR:
+            sprintf(ctemp,"\"tcp_read_error\":%lld",data);
+            add_flow_log_combine(pfls,ctemp);
+            break;
+        case FL_READ_SIZE:
+            sprintf(ctemp,"\"read_size\":%lld",data);
+            add_flow_log_combine(pfls,ctemp);
+            break;
+        case FL_FILE_TYPE:
+            sprintf(ctemp,"\"file_type\":%s",data);
+            add_flow_log_combine(pfls,ctemp);
+            break;
+        default:
+            break;
+    }
+}
+
+
+void add_tcp_rwtimeout_log_begin(void *app_ctx, void *uss, const char *key, const char *value)
+{
+    AVApplicationContext *ctx = (AVApplicationContext *)app_ctx;
+    URLStartStatus* puss = (URLStartStatus*)uss;
+	
+    if (!ctx || !puss)
+        return;
+	
+	FlowLogStatus *pfls = puss->fls;
+    
+    memset(pfls->tcp_rwtimeout_log,0,sizeof(pfls->tcp_rwtimeout_log));
+    char ctemp[512]={0};
+    if(value!=NULL){
+        char* pfile = strrchr(value, '/');
+        if (pfile!=NULL) {
+            snprintf(ctemp, sizeof(ctemp), "\"%s\":\"%s\"",key, pfile+1 );
+        }
+    }
+    else{
+        snprintf(ctemp, sizeof(ctemp), "\"%s\":\"%s\"",key, "null" );
+    }
+    snprintf(pfls->tcp_rwtimeout_log, sizeof(pfls->tcp_rwtimeout_log), "%s",ctemp);
+}
+
+void add_tcp_rwtimeout_log_end(void *app_ctx, void *uss, const char* key, int64_t value)
+{
+    AVApplicationContext *ctx = (AVApplicationContext *)app_ctx;
+    URLStartStatus* puss = (URLStartStatus*)uss;
+	
+    if (!ctx || !puss)
+        return;
+	
+	FlowLogStatus *pfls = puss->fls;
+    
+    char ctemp[512]={0};
+    char result[512]={0};
+    snprintf(ctemp, sizeof(ctemp), "\"%s\":%lld",key, value);
+    snprintf(result, sizeof(result), "%s,%s", pfls->tcp_rwtimeout_log, ctemp);
+    startimes_play_log(ctx, STAR_TIME_LOG_TCP, LOG_TAG_TCP_RWTIMEOUT, "%s", result);
+}
+
+void init_tcp_connection_logs(void *app_ctx, void *uss){
+    AVApplicationContext *ctx = (AVApplicationContext *)app_ctx;
+    URLStartStatus* puss = (URLStartStatus*)uss;
+	
+    if (!ctx || !puss)
+        return;
+	
+	FlowLogStatus *pfls = puss->fls;
+	
+    memset(pfls->tcp_connection_logs,0,sizeof(pfls->tcp_connection_logs));
+}
+
+const char* get_tcp_connection_logs(void *app_ctx, void *uss){
+    AVApplicationContext *ctx = (AVApplicationContext *)app_ctx;
+    URLStartStatus* puss = (URLStartStatus*)uss;
+	
+    if (!ctx || !puss)
+        return NULL;
+	
+	FlowLogStatus *pfls = puss->fls;
+	
+    return pfls->tcp_connection_logs;
+}
+
+void add_tcp_connection_log(void *app_ctx, void *uss, int64_t tcp_connect_begin, int64_t tcp_connect_finish, const char *remote_ip, int error_code)
+{
+    AVApplicationContext *ctx = (AVApplicationContext *)app_ctx;
+    URLStartStatus* puss = (URLStartStatus*)uss;
+	
+    if (!ctx || !puss)
+        return;
+	
+	FlowLogStatus *pfls = puss->fls;
+	
+	
+    char connect_info[TCP_CONNECTION_LOG_SIZE]={0};
+    snprintf(connect_info, sizeof(connect_info), "{\"%s\":%lld,\"%s\":%lld,\"%s\":\"%s\",\"%s\":%d}",
+            "tcp_connect_begin", tcp_connect_begin,
+            "tcp_connect_finish", tcp_connect_finish,
+            "remote_ip", strlen(remote_ip)>0?remote_ip:"null",
+            "error_code", error_code);
+    
+    int totallen = strlen(pfls->tcp_connection_logs);
+    int currentlen = strlen(connect_info);
+    if( totallen>0 ){
+        if (totallen + currentlen +3 < TCP_CONNECTION_LOG_TOTAL_SIZE ) {
+            snprintf(pfls->tcp_connection_logs, sizeof(pfls->tcp_connection_logs), "%s,%s", pfls->tcp_connection_logs, connect_info);
+        }
+        else {
+            av_log(NULL, AV_LOG_WARNING, "tcp connection logs size out of range, max_size=%d, target_size=%d", TCP_CONNECTION_LOG_TOTAL_SIZE, totallen + currentlen );
+        }
+    }
+    else
+        strcpy(pfls->tcp_connection_logs, connect_info);
 }

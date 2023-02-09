@@ -322,6 +322,7 @@
 
 #include "avio.h"
 #include "libavformat/version.h"
+#include "libavutil/application.h"
 
 struct AVFormatContext;
 
@@ -437,6 +438,19 @@ int av_get_packet(AVIOContext *s, AVPacket *pkt, int size);
  */
 int av_append_packet(AVIOContext *s, AVPacket *pkt, int size);
 
+#if FF_API_LAVF_FRAC
+/*************************************************/
+/* fractional numbers for exact pts handling */
+
+/**
+ * The exact value of the fractional number is: 'val + num / den'.
+ * num is assumed to be 0 <= num < den.
+ */
+typedef struct AVFrac {
+    int64_t val, num, den;
+} AVFrac;
+#endif
+
 /*************************************************/
 /* input/output formats */
 
@@ -450,6 +464,8 @@ typedef struct AVProbeData {
     unsigned char *buf; /**< Buffer must have AVPROBE_PADDING_SIZE of extra allocated bytes filled with zero. */
     int buf_size;       /**< Size of buf except extra allocated bytes */
     const char *mime_type; /**< mime_type, when known. */
+    char* customkey_alg;    /*custom crypt alg to decrypt for probe*/
+    char* customkey_src;    /*custom crypt src to get key fro probe*/
 } AVProbeData;
 
 #define AVPROBE_SCORE_RETRY (AVPROBE_SCORE_MAX/4)
@@ -465,6 +481,10 @@ typedef struct AVProbeData {
 #define AVFMT_NOFILE        0x0001
 #define AVFMT_NEEDNUMBER    0x0002 /**< Needs '%d' in filename. */
 #define AVFMT_SHOW_IDS      0x0008 /**< Show format stream IDs numbers. */
+#if FF_API_LAVF_FMT_RAWPICTURE
+#define AVFMT_RAWPICTURE    0x0020 /**< Format wants AVPicture structure for
+                                      raw picture data. @deprecated Not used anymore */
+#endif
 #define AVFMT_GLOBALHEADER  0x0040 /**< Format wants global header. */
 #define AVFMT_NOTIMESTAMPS  0x0080 /**< Format does not need / have any timestamps. */
 #define AVFMT_GENERIC_INDEX 0x0100 /**< Use generic index building code. */
@@ -790,9 +810,9 @@ enum AVStreamParseType {
     AVSTREAM_PARSE_HEADERS,    /**< Only parse headers, do not repack. */
     AVSTREAM_PARSE_TIMESTAMPS, /**< full parsing and interpolation of timestamps for frames not starting on a packet boundary */
     AVSTREAM_PARSE_FULL_ONCE,  /**< full parsing and repack of the first frame only, only implemented for H.264 currently */
-    AVSTREAM_PARSE_FULL_RAW,   /**< full parsing and repack with timestamp and position generation by parser for raw
-                                    this assumes that each packet in the file contains no demuxer level headers and
-                                    just codec level data, otherwise position generation would fail */
+    AVSTREAM_PARSE_FULL_RAW=MKTAG(0,'R','A','W'),       /**< full parsing and repack with timestamp and position generation by parser for raw
+                                                             this assumes that each packet in the file contains no demuxer level headers and
+                                                             just codec level data, otherwise position generation would fail */
 };
 
 typedef struct AVIndexEntry {
@@ -882,6 +902,14 @@ typedef struct AVStream {
     AVCodecContext *codec;
 #endif
     void *priv_data;
+
+#if FF_API_LAVF_FRAC
+    /**
+     * @deprecated this field is unused
+     */
+    attribute_deprecated
+    struct AVFrac pts;
+#endif
 
     /**
      * This is the fundamental unit of time (in seconds) in terms
@@ -982,27 +1010,8 @@ typedef struct AVStream {
     int event_flags;
 #define AVSTREAM_EVENT_FLAG_METADATA_UPDATED 0x0001 ///< The call resulted in updated metadata.
 
-    /**
-     * Real base framerate of the stream.
-     * This is the lowest framerate with which all timestamps can be
-     * represented accurately (it is the least common multiple of all
-     * framerates in the stream). Note, this value is just a guess!
-     * For example, if the time base is 1/90000 and all frames have either
-     * approximately 3600 or 1800 timer ticks, then r_frame_rate will be 50/1.
-     */
-    AVRational r_frame_rate;
 
-#if FF_API_LAVF_FFSERVER
-    /**
-     * String containing pairs of key and values describing recommended encoder configuration.
-     * Pairs are separated by ','.
-     * Keys are separated from values by '='.
-     *
-     * @deprecated unused
-     */
-    attribute_deprecated
-    char *recommended_encoder_configuration;
-#endif
+
 
     /**
      * Codec parameters associated with this stream. Allocated and freed by
@@ -1019,9 +1028,7 @@ typedef struct AVStream {
      * All fields below this line are not part of the public API. They
      * may not be used outside of libavformat and can be changed and
      * removed at will.
-     * Internal note: be aware that physically removing these fields
-     * will break ABI. Replace removed fields with dummy fields, and
-     * add new fields to AVStreamInternal.
+     * New public fields should be added right above.
      *****************************************************************
      */
 
@@ -1099,6 +1106,19 @@ typedef struct AVStream {
                                     support seeking natively. */
     int nb_index_entries;
     unsigned int index_entries_allocated_size;
+
+    /**
+     * Real base framerate of the stream.
+     * This is the lowest framerate with which all timestamps can be
+     * represented accurately (it is the least common multiple of all
+     * framerates in the stream). Note, this value is just a guess!
+     * For example, if the time base is 1/90000 and all frames have either
+     * approximately 3600 or 1800 timer ticks, then r_frame_rate will be 50/1.
+     *
+     * Code outside avformat should access this field using:
+     * av_stream_get/set_r_frame_rate(stream)
+     */
+    AVRational r_frame_rate;
 
     /**
      * Stream Identifier
@@ -1206,11 +1226,20 @@ typedef struct AVStream {
     int inject_global_side_data;
 
     /**
+     * String containing paris of key and values describing recommended encoder configuration.
+     * Paris are separated by ','.
+     * Keys are separated from values by '='.
+     */
+    char *recommended_encoder_configuration;
+
+    /**
      * display aspect ratio (0 if unknown)
      * - encoding: unused
      * - decoding: Set by libavformat to calculate sample_aspect_ratio internally
      */
     AVRational display_aspect_ratio;
+
+    struct FFFrac *priv_pts;
 
     /**
      * An opaque field for libavformat internal usage.
@@ -1931,6 +1960,8 @@ typedef struct AVFormatContext {
      * - decoding: set by user
      */
     int max_streams;
+    int64_t app_ctx_intptr;
+    AVApplicationContext *app_ctx;
 } AVFormatContext;
 
 #if FF_API_FORMAT_GET_SET
@@ -3068,5 +3099,38 @@ AVRational av_stream_get_codec_timebase(const AVStream *st);
 /**
  * @}
  */
+
+/*
+ *define error code for fail to play
+ */
+#define ERROR_M3U8_DNS_FAIL             1001
+#define ERROR_M3U8_TCP_CONNECT_FAIL     1002
+#define ERROR_M3U8_HTTP_SEND_FAIL       1003
+#define ERROR_M3U8_HTTP_OPEN_FAIL       1004
+#define ERROR_M3U8_HTTP_RESPONSE_FAIL   1005
+#define ERROR_TS_DNS_FAIL               2001
+#define ERROR_TS_TCP_CONNECT_FAIL       2002
+#define ERROR_TS_HTTP_SEND_FAIL         2003
+#define ERROR_TS_HTTP_OPEN_FAIL         2004
+#define ERROR_TS_HTTP_RESPONSE_FAIL     2005
+#define ERROR_KEY_DNS_FAIL              3001
+#define ERROR_KEY_TCP_CONNECT_FAIL      3002
+#define ERROR_KEY_HTTP_SEND_FAIL        3003
+#define ERROR_KEY_HTTP_OPEN_FAIL        3004
+#define ERROR_KEY_HTTP_RESPONSE_FAIL    3005
+#define ERROR_KEY_URL_FAIL              3006
+#define ERROR_KEY_PARSE_FAIL            3007
+#define ERROR_KEY_PARSE_INIT_FAIL       3008
+#define ERROR_KEY_PARSE_STREAM_FAIL     3009
+#define ERROR_REDIRECTED_M3U8_DNS_FAIL           4001
+#define ERROR_REDIRECTED_M3U8_TCP_CONNECT_FAIL   4002
+#define ERROR_REDIRECTED_M3U8_HTTP_SEND_FAIL     4003
+#define ERROR_REDIRECTED_M3U8_HTTP_OPEN_FAIL     4004
+#define ERROR_REDIRECTED_M3U8_HTTP_RESPONSE_FAIL 4005
+#define ERROR_MP4_DNS_FAIL               5001
+#define ERROR_MP4_TCP_CONNECT_FAIL       5002
+#define ERROR_MP4_HTTP_SEND_FAIL         5003
+#define ERROR_MP4_HTTP_OPEN_FAIL         5004
+#define ERROR_MP4_HTTP_RESPONSE_FAIL     5005
 
 #endif /* AVFORMAT_AVFORMAT_H */

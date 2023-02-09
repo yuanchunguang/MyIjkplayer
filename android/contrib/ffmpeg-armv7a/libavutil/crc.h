@@ -53,8 +53,12 @@ typedef enum {
     AV_CRC_32_IEEE,
     AV_CRC_32_IEEE_LE,  /*< reversed bitorder version of AV_CRC_32_IEEE */
     AV_CRC_16_ANSI_LE,  /*< reversed bitorder version of AV_CRC_16_ANSI */
+#if FF_API_CRC_BIG_TABLE
+    AV_CRC_24_IEEE = 12,
+#else
     AV_CRC_24_IEEE,
     AV_CRC_8_EBU,
+#endif /* FF_API_CRC_BIG_TABLE */
     AV_CRC_MAX,         /*< Not part of public API! Do not use outside libavutil. */
 }AVCRCId;
 
@@ -92,6 +96,16 @@ const AVCRC *av_crc_get_table(AVCRCId crc_id);
  */
 uint32_t av_crc(const AVCRC *ctx, uint32_t crc,
                 const uint8_t *buffer, size_t length) av_pure;
+
+
+/**
+ * Calculate the CRC of a block, same algorithm to java CRC32
+ * @ctx CRC table context, use av_crc_get_table to get standard table, to same with java CRC32 should be AV_CRC_32_IEEE_LE
+ * @param crc CRC of previous blocks if any or initial value for CRC, to same with java CRC32 should be -1
+ * @return CRC updated with the data from the given block
+ */
+uint32_t av_crc2(const AVCRC *ctx, uint32_t crc,
+                      const uint8_t *buffer, size_t length);
 
 /**
  * @}

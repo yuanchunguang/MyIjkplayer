@@ -44,8 +44,39 @@ typedef enum {
     AV_CLASS_CATEGORY_DEVICE_AUDIO_INPUT,
     AV_CLASS_CATEGORY_DEVICE_OUTPUT,
     AV_CLASS_CATEGORY_DEVICE_INPUT,
-    AV_CLASS_CATEGORY_NB  ///< not part of ABI/API
+    AV_CLASS_CATEGORY_NB, ///< not part of ABI/API
 }AVClassCategory;
+
+enum FLOW_LOG{
+    FL_FILE,
+    FL_FILE_SIZE,
+    FL_DNS_USE_PRE,
+    FL_DOWNLOAD_BEGIN,
+    FL_DNS_BEGIN,
+    FL_DNS_FINISH,
+    FL_TCP_CONNECT_BEGIN,
+    FL_TCP_CONNECT_FINISH,
+    FL_HTTP_RESPONSE,
+    FL_DOWNLOAD_FINISH,
+    FL_DOWNLOAD_ERROR_CODE,
+    FL_HTTP_RESPONSE_CODE,
+    FL_TCP_CONNECTIONS,
+    FL_TCP_READ_ERROR,
+    FL_READ_SIZE,
+    FL_FILE_TYPE
+};
+
+void add_flow_log_str(void *app_ctx, void *uss, enum FLOW_LOG type, const char *data);
+//int add_flow_log_combine(void *app_ctx,const char* ctemp);
+void add_flow_log(void *app_ctx, void *uss, enum FLOW_LOG type, int64_t data);
+void add_flow_log_string(void *app_ctx, void *uss, enum FLOW_LOG type, const char *data);
+
+void init_tcp_connection_logs(void *app_ctx, void *uss);
+void add_tcp_connection_log(void *app_ctx, void *uss, int64_t tcp_connect_begin, int64_t tcp_connect_finish, const char *emote_ip, int error_code);
+const char* get_tcp_connection_logs(void *app_ctx, void* uss);
+
+void add_tcp_rwtimeout_log_begin(void *app_ctx, void *uss, const char *key, const char *value);
+void add_tcp_rwtimeout_log_end(void *app_ctx, void *uss, const char *key, int64_t value);
 
 #define AV_IS_INPUT_DEVICE(category) \
     (((category) == AV_CLASS_CATEGORY_DEVICE_VIDEO_INPUT) || \
@@ -151,6 +182,24 @@ typedef struct AVClass {
  *
  * @{
  */
+/*
+ * tao: main log
+ *
+ */
+#define MAX_LOG_SIZE 8192
+
+#define STAR_LOG_MAIN     0
+
+/*
+ * zy: main log
+ */
+#define STAR_TIME_LOG_MAIN     0
+
+#define STAR_TIME_LOG_TCP      1
+
+#define STAR_TIME_LOG_COMMON       3
+
+#define STAR_TIME_LOG_FLOW_LOG     4
 
 /**
  * Print no output.
@@ -231,7 +280,27 @@ typedef struct AVClass {
  * @param fmt The format string (printf-compatible) that specifies how
  *        subsequent arguments are converted to output.
  */
+
+
+#define LOG_TAG_TCP_RWTIMEOUT "STAR_TCP_RWTIMEOUT_LOG"
+#define LOG_TAG_PLAY_FLOW_LOG "PLAY_FLOW_LOG"
+
 void av_log(void *avcl, int level, const char *fmt, ...) av_printf_format(3, 4);
+
+ /**
+  *  * taowj: send start err
+  *   */
+ void startimes_error_log(void *app_ctx, int level, const char *fmt, ...) av_printf_format(3, 4);
+
+ /**
+  *  * zy: send start err
+  *   */
+ void startimes_start_log(void *app_ctx, int level, const char *fmt, ...) av_printf_format(3, 4);
+
+ void startimes_play_log(void *app_ctx, int level, const char* tag, const char *fmt, ...) av_printf_format(4, 5);
+
+ void startimes_log(void *avcl, int level, const char *fmt, ...) av_printf_format(3, 4);
+
 
 
 /**
@@ -250,6 +319,13 @@ void av_log(void *avcl, int level, const char *fmt, ...) av_printf_format(3, 4);
  * @param vl The arguments referenced by the format string.
  */
 void av_vlog(void *avcl, int level, const char *fmt, va_list vl);
+
+
+//zy add
+void star_vlog(void* avcl, int level, const char *fmt, va_list vl);
+void star_log_set_callback(void (*callback)(void*, int, const char*, va_list));
+/////////////////////////
+
 
 /**
  * Get the current log level
@@ -333,6 +409,20 @@ void av_log_format_line(void *ptr, int level, const char *fmt, va_list vl,
  */
 int av_log_format_line2(void *ptr, int level, const char *fmt, va_list vl,
                         char *line, int line_size, int *print_prefix);
+
+#if FF_API_DLOG
+/**
+ * av_dlog macros
+ * @deprecated unused
+ * Useful to print debug messages that shouldn't get compiled in normally.
+ */
+
+#ifdef DEBUG
+#    define av_dlog(pctx, ...) av_log(pctx, AV_LOG_DEBUG, __VA_ARGS__)
+#else
+#    define av_dlog(pctx, ...) do { if (0) av_log(pctx, AV_LOG_DEBUG, __VA_ARGS__); } while (0)
+#endif
+#endif /* FF_API_DLOG */
 
 /**
  * Skip repeated messages, this requires the user app to use av_log() instead of

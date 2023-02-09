@@ -357,6 +357,16 @@ AVRational av_get_time_base_q(void);
  */
 char *av_fourcc_make_string(char *buf, uint32_t fourcc);
 
+/*
+ * decompress gzip data
+ * @param src, compressed data buffer
+ * @param src_len, compressed data len
+ * @param dst, decompressed data buffer
+ * @param dst_len, decompressed data buff len
+ * @return decompressed data len, if <0  decompress failed
+ */
+int av_zlib_decompress(uint8_t* src, int src_len, uint8_t* dst, int dst_len);
+
 /**
  * @}
  * @}

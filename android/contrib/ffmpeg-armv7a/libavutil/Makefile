@@ -12,6 +12,8 @@ HEADERS = adler32.h                                                     \
           avutil.h                                                      \
           base64.h                                                      \
           blowfish.h                                                    \
+          blowfish32.h                                                  \
+          customkeys.h                                                  \
           bprint.h                                                      \
           bswap.h                                                       \
           buffer.h                                                      \
@@ -81,8 +83,12 @@ HEADERS = adler32.h                                                     \
           xtea.h                                                        \
           tea.h                                                         \
           thread.h                                                      \
+          rsa_crypto.h                                                  \
+          openssl_md5.h                                                 \
 
 HEADERS-$(CONFIG_LZO)                   += lzo.h
+
+HEADERS-$(CONFIG_OPENCL)                += opencl.h
 
 ARCH_HEADERS = bswap.h                                                  \
                intmath.h                                                \
@@ -100,6 +106,8 @@ OBJS = adler32.o                                                        \
        avstring.o                                                       \
        base64.o                                                         \
        blowfish.o                                                       \
+       blowfish32.o                                                     \
+       customkeys.o                                                     \
        bprint.o                                                         \
        buffer.o                                                         \
        cast5.o                                                          \
@@ -161,6 +169,11 @@ OBJS = adler32.o                                                        \
        xga_font_data.o                                                  \
        xtea.o                                                           \
        tea.o                                                            \
+       rsa_crypto.o                                                     \
+       openssl_md5.o                                                    \
+       encryption_info.o
+
+OBJS-$(!HAVE_ATOMICS_NATIVE)            += atomic.o                     \
 
 OBJS-$(CONFIG_CUDA)                     += hwcontext_cuda.o
 OBJS-$(CONFIG_D3D11VA)                  += hwcontext_d3d11va.o
@@ -188,6 +201,10 @@ SKIPHEADERS-$(CONFIG_OPENCL)           += hwcontext_opencl.h
 SKIPHEADERS-$(CONFIG_VAAPI)            += hwcontext_vaapi.h
 SKIPHEADERS-$(CONFIG_VIDEOTOOLBOX)     += hwcontext_videotoolbox.h
 SKIPHEADERS-$(CONFIG_VDPAU)            += hwcontext_vdpau.h
+SKIPHEADERS-$(HAVE_ATOMICS_GCC)        += atomic_gcc.h
+SKIPHEADERS-$(HAVE_ATOMICS_SUNCC)      += atomic_suncc.h
+SKIPHEADERS-$(HAVE_ATOMICS_WIN32)      += atomic_win32.h
+SKIPHEADERS-$(CONFIG_OPENCL)           += opencl.h
 
 TESTPROGS = adler32                                                     \
             aes                                                         \

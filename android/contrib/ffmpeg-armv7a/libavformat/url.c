@@ -161,3 +161,18 @@ AVIODirEntry *ff_alloc_dir_entry(void)
     }
     return entry;
 }
+
+
+void handle_url_args(struct url_args_org *args, const char *key, int key_len, char **dest, int *dest_len)
+{
+    if (!strncmp(key, "info=", key_len)) {
+        *dest     =        args->info;
+        *dest_len = sizeof(args->info);
+    } else if (!strncmp(key, "lang=", key_len)) {
+        *dest     =        args->lang;
+        *dest_len = sizeof(args->lang);
+    } else if (!strncmp(key, "gzip=", key_len)) {
+        *dest     =        args->gzip;
+        *dest_len = sizeof(args->gzip);
+    }
+}

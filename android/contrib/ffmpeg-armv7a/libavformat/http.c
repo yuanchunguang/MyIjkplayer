@@ -39,6 +39,8 @@
 #include "network.h"
 #include "os_support.h"
 #include "url.h"
+#include "avformat.h"
+#include "global_variables.h"
 
 /* XXX: POST protocol is not completely implemented because ffmpeg uses
  * only a subset of it. */
@@ -61,7 +63,7 @@ typedef enum {
 
 typedef struct HTTPContext {
     const AVClass *class;
-    URLContext *hd;
+    URLContext *hd;  //URLContext of below protocol may be tcp/tls
     unsigned char buffer[BUFFER_SIZE], *buf_ptr, *buf_end;
     int line_count;
     int http_code;
@@ -82,6 +84,7 @@ typedef struct HTTPContext {
     char *user_agent_deprecated;
 #endif
     char *content_type;
+    char *authorization;
     /* Set if the server correctly handles Connection: close and will close
      * the connection after feeding us the content. */
     int willclose;
@@ -93,6 +96,7 @@ typedef struct HTTPContext {
     int end_header;
     /* A flag which indicates if we use persistent connections. */
     int multiple_requests;
+    int use_redirect_ip;
     uint8_t *post_data;
     int post_datalen;
     int is_akamai;
@@ -119,6 +123,7 @@ typedef struct HTTPContext {
     int reconnect;
     int reconnect_at_eof;
     int reconnect_streamed;
+    int reconnect_delay;
     int reconnect_delay_max;
     int listen;
     char *resource;
@@ -127,14 +132,21 @@ typedef struct HTTPContext {
     HandshakeState handshake_step;
     int is_connected_server;
     char *tcp_hook;
-    char * app_ctx_intptr;
+    int64_t app_ctx_intptr;
     AVApplicationContext *app_ctx;
+	int64_t url_start_status_intptr;
+    URLStartStatus* url_start_status;
+    int is_hit_cache;
+    char *redirect_ip;
 } HTTPContext;
 
 #define OFFSET(x) offsetof(HTTPContext, x)
 #define D AV_OPT_FLAG_DECODING_PARAM
 #define E AV_OPT_FLAG_ENCODING_PARAM
 #define DEFAULT_USER_AGENT "Lavf/" AV_STRINGIFY(LIBAVFORMAT_VERSION)
+//fix bug of tcp connect reset by peer on some wlan network
+//#define DEFAULT_USER_AGENT "Lavf/" AV_STRINGIFY(LIBAVFORMAT_VERSION)
+#define DEFAULT_USER_AGENT "Mozilla/5.0"
 
 static const AVOption options[] = {
     { "seekable", "control seekability of connection", OFFSET(seekable), AV_OPT_TYPE_BOOL, { .i64 = -1 }, -1, 1, D },
@@ -143,11 +155,14 @@ static const AVOption options[] = {
     { "headers", "set custom HTTP headers, can override built in default headers", OFFSET(headers), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D | E },
     { "content_type", "set a specific content type for the POST messages", OFFSET(content_type), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D | E },
     { "user_agent", "override User-Agent header", OFFSET(user_agent), AV_OPT_TYPE_STRING, { .str = DEFAULT_USER_AGENT }, 0, 0, D },
+    { "user-agent", "override User-Agent header", OFFSET(user_agent), AV_OPT_TYPE_STRING, { .str = DEFAULT_USER_AGENT }, 0, 0, D },
+    { "user-agent", "override User-Agent header", OFFSET(user_agent_deprecated), AV_OPT_TYPE_STRING, { .str = DEFAULT_USER_AGENT }, 0, 0, D },
     { "referer", "override referer header", OFFSET(referer), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D },
 #if FF_API_HTTP_USER_AGENT
     { "user-agent", "override User-Agent header", OFFSET(user_agent_deprecated), AV_OPT_TYPE_STRING, { .str = DEFAULT_USER_AGENT }, 0, 0, D },
 #endif
     { "multiple_requests", "use persistent connections", OFFSET(multiple_requests), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, D | E },
+    { "use_redirect_ip", "use redirct ip", OFFSET(use_redirect_ip), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, D | E },
     { "post_data", "set custom HTTP post data", OFFSET(post_data), AV_OPT_TYPE_BINARY, .flags = D | E },
     { "mime_type", "export the MIME type", OFFSET(mime_type), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, AV_OPT_FLAG_EXPORT | AV_OPT_FLAG_READONLY },
     { "http_version", "export the http response version", OFFSET(http_version), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, AV_OPT_FLAG_EXPORT | AV_OPT_FLAG_READONLY },
@@ -172,13 +187,16 @@ static const AVOption options[] = {
     { "resource", "The resource requested by a client", OFFSET(resource), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, E },
     { "reply_code", "The http status code to return to a client", OFFSET(reply_code), AV_OPT_TYPE_INT, { .i64 = 200}, INT_MIN, 599, E},
     { "http-tcp-hook", "hook protocol on tcp", OFFSET(tcp_hook), AV_OPT_TYPE_STRING, { .str = "tcp" }, 0, 0, D | E },
-    { "ijkapplication", "AVApplicationContext", OFFSET(app_ctx_intptr), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, .flags = D },
+    { "ijkapplication", "AVApplicationContext", OFFSET(app_ctx_intptr), AV_OPT_TYPE_INT64, { .i64 = 0 }, INT64_MIN, INT64_MAX, .flags = D },
+	{ "URLStartStatus", "set url start status intptr", OFFSET(url_start_status_intptr), AV_OPT_TYPE_INT64, { .i64 = 0 }, INT64_MIN, INT64_MAX, .flags = D },
+    { "authorization", "authorization header", OFFSET(authorization), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D | E },
+	{ "redirect_ip", "The redirect_ip of 302", OFFSET(redirect_ip), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D | E },
     { NULL }
 };
 
 static int http_connect(URLContext *h, const char *path, const char *local_path,
                         const char *hoststr, const char *auth,
-                        const char *proxyauth, int *new_location);
+                        const char *proxyauth, int *new_location, int* send_fail);
 static int http_read_header(URLContext *h, int *new_location);
 static int http_shutdown(URLContext *h, int flags);
 
@@ -242,29 +260,206 @@ static int http_open_cnx_internal(URLContext *h, AVDictionary **options)
     ff_url_join(buf, sizeof(buf), lower_proto, NULL, hostname, port, NULL);
 
     if (!s->hd) {
-        av_dict_set_intptr(options, "ijkapplication", (uintptr_t)s->app_ctx, 0);
+		av_dict_set_int(options, "ijkapplication", (int64_t)(intptr_t)s->app_ctx, 0);
+        if (s->app_ctx && s->url_start_status){
+            //ffg_pss_set_http_path_info(s->app_ctx,local_path);
+			s->url_start_status->path_type = ffg_get_http_path_info(local_path);
+			av_dict_set_int(options, "URLStartStatus", (int64_t)(intptr_t)s->url_start_status, 0);
+		}
+		
+        av_log(NULL, AV_LOG_DEBUG, "chenwq: http open, open tcp ctx, url=%s\n", s->location);
+        add_flow_log_str(s->app_ctx,s->url_start_status,FL_FILE,s->location);
+        
+        if( s->url_start_status->status_type == STATUS_TYPE_ALT )
+        {
+            add_flow_log(s->app_ctx,s->url_start_status,FL_FILE_TYPE, "avseparate_audio");
+        }
+        
+        add_flow_log(s->app_ctx,s->url_start_status,FL_DOWNLOAD_BEGIN,av_gettime()/1000);
+        add_tcp_rwtimeout_log_begin(s->app_ctx,s->url_start_status,"file", s->location);
+			
+        if(s->app_ctx)
+        	    h->app_ctx = s->app_ctx;
+
         err = ffurl_open_whitelist(&s->hd, buf, AVIO_FLAG_READ_WRITE,
                                    &h->interrupt_callback, options,
                                    h->protocol_whitelist, h->protocol_blacklist, h);
         if (err < 0)
             return err;
     }
-
+    else if(s->multiple_requests){
+		av_dict_set_int(options, "ijkapplication", (int64_t)(intptr_t)s->app_ctx, 0);
+		if (s->app_ctx && s->url_start_status){
+            //ffg_pss_set_http_path_info(s->app_ctx,local_path);
+			s->url_start_status->path_type = ffg_get_http_path_info(local_path);
+			av_dict_set_int(options, "URLStartStatus", (int64_t)(intptr_t)s->url_start_status, 0);
+		}
+		
+        av_log(NULL, AV_LOG_DEBUG, "chenwq: http open, open tcp ctx, url=%s\n", s->location);
+        add_flow_log_str(s->app_ctx,s->url_start_status,FL_FILE,s->location);
+        
+        if( s->url_start_status->status_type == STATUS_TYPE_ALT )
+        {
+            add_flow_log(s->app_ctx,s->url_start_status,FL_FILE_TYPE, "avseparate_audio");
+        }
+        
+        add_flow_log(s->app_ctx,s->url_start_status,FL_DOWNLOAD_BEGIN,av_gettime()/1000);
+        add_tcp_rwtimeout_log_begin(s->app_ctx,s->url_start_status,"file", s->location);
+        
+        if(s->app_ctx)
+            h->app_ctx = s->app_ctx;
+        
+    }
+        
+    
+httpconnect:
     av_strlcpy(prev_location, s->location, sizeof(prev_location));
+    int send_fail = 0;
     err = http_connect(h, path, local_path, hoststr,
-                       auth, proxyauth, &location_changed);
-    if (err < 0)
+                       auth, proxyauth, &location_changed, &send_fail);
+    if (err < 0){
+		if (s->app_ctx && s->url_start_status && (!s->url_start_status->complete)){
+			if(s->url_start_status->status_type == STATUS_TYPE_ALT){
+				if(s->url_start_status->path_type==PATH_M3U8){
+					if (s->app_ctx->pss->redirect) {
+						startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_audio = %d", send_fail==0?ERROR_REDIRECTED_M3U8_HTTP_OPEN_FAIL:ERROR_REDIRECTED_M3U8_HTTP_SEND_FAIL);
+					}else{
+						startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_audio = %d", send_fail==0?ERROR_M3U8_HTTP_OPEN_FAIL:ERROR_M3U8_HTTP_SEND_FAIL);
+					}
+					if (s->http_code!=0)
+						startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_ex_audio = %d", s->http_code );
+					else
+						startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_ex_audio = %d", err );
+				}else if(s->url_start_status->path_type==PATH_TS){
+					startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_audio = %d", send_fail==0?ERROR_TS_HTTP_OPEN_FAIL:ERROR_TS_HTTP_SEND_FAIL);
+					if (s->http_code!=0)
+						startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_ex_audio = %d", s->http_code );
+					else
+						startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_ex_audio = %d", err );
+				}
+				else if(s->url_start_status->path_type==PATH_KEY){
+					startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_audio = %d", send_fail==0?ERROR_KEY_HTTP_OPEN_FAIL:ERROR_KEY_HTTP_SEND_FAIL);
+					if (s->http_code!=0)
+						startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_ex_audio = %d", s->http_code );
+					else
+						startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_ex_audio = %d", err );
+				}
+			}
+			else{
+				if(s->url_start_status->path_type==PATH_M3U8){
+					if (s->app_ctx->pss->redirect) {
+						startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code = %d", send_fail==0?ERROR_REDIRECTED_M3U8_HTTP_OPEN_FAIL:ERROR_REDIRECTED_M3U8_HTTP_SEND_FAIL);
+					}else{
+						startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code = %d", send_fail==0?ERROR_M3U8_HTTP_OPEN_FAIL:ERROR_M3U8_HTTP_SEND_FAIL);
+					}
+					if (s->http_code!=0)
+						startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_ex = %d", s->http_code );
+					else
+						startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_ex = %d", err );
+				}else if(s->url_start_status->path_type==PATH_TS){
+					startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code = %d", send_fail==0?ERROR_TS_HTTP_OPEN_FAIL:ERROR_TS_HTTP_SEND_FAIL);
+					if (s->http_code!=0)
+						startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_ex = %d", s->http_code );
+					else
+						startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_ex = %d", err );
+				}
+				else if(s->url_start_status->path_type==PATH_KEY){
+					startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code = %d", send_fail==0?ERROR_KEY_HTTP_OPEN_FAIL:ERROR_KEY_HTTP_SEND_FAIL);
+					if (s->http_code!=0)
+						startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_ex = %d", s->http_code );
+					else
+						startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_ex = %d", err );
+				}else if(s->url_start_status->path_type==PATH_MP4){
+					startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code = %d", send_fail==0?ERROR_MP4_HTTP_OPEN_FAIL:ERROR_MP4_HTTP_SEND_FAIL);
+					if (s->http_code!=0)
+						startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_ex = %d", s->http_code );
+					else
+						startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_ex = %d", err );
+				}
+				
+			}
+		}
+		
         return err;
-
+    }
     return location_changed;
 }
 
+static int check_predns_match_host(HTTPContext *s, const char* hostname){
+    if (strlen(hostname)>0) {
+        for(int i=0; i<s->app_ctx->pre_dns->star_DNS_list.num;i++){
+            DnsInfo *tempDNS=&(s->app_ctx->pre_dns->star_DNS_list.list[i]);
+            if (0 == strcmp(hostname, tempDNS->star_DNS_ip[0])){
+                av_log(NULL, AV_LOG_DEBUG, "http_redirect_ip:check predns match host success, target=%s, predns=%s\n", hostname, tempDNS->star_DNS_ip[0]);
+                return 1;
+            }
+        }
+    }
+    av_log(NULL, AV_LOG_DEBUG, "http_redirect_ip:check predns match host fail, target=%s\n", hostname);
+    return 0;
+}
+
+static int http_redirect_ip_set_pre_dns(URLContext *h){
+	HTTPContext *s = h->priv_data;
+	if (s->redirect_ip == NULL || s->location==NULL ){
+        return 0;
+	}
+    
+    char hostname[1024], hoststr[1024], proto[10],auth[1024];
+    char path1[MAX_URL_SIZE];
+    int port;
+    av_url_split(proto, sizeof(proto), auth, sizeof(auth),
+                 hostname, sizeof(hostname), &port,
+                 path1, sizeof(path1), s->location);
+	
+	if (s->app_ctx->pre_dns->pre_dns_on == 1 && check_predns_match_host(s, hostname)){
+        av_log(NULL,AV_LOG_DEBUG,
+               "http_redirect_ip:http_redirect_ip_set_pre_dns, pre_dns_on worked, hostname=%s\n", hostname);
+        return 0;
+    }
+    
+    memset(s->app_ctx->pre_dns, 0, sizeof(s->app_ctx->pre_dns));
+    
+	s->app_ctx->pre_dns->star_DNS_list.num = 1;
+    strcpy(((s->app_ctx->pre_dns->star_DNS_list.list)[0].star_DNS_ip)[0], hostname);
+    av_log(NULL,AV_LOG_DEBUG,
+           "http_redirect_ip:http_redirect_ip_set_pre_dns,hostname=%s,ip=%s,location=%s\n",hostname,s->redirect_ip,s->location);
+    
+    char temp_string[STAR_MAX_NAME_NUM];
+    memset(temp_string, 0,sizeof(temp_string));
+    char *pstr;
+    char *pp;
+    strcpy(temp_string,s->redirect_ip);
+    pstr =  strtok_r(temp_string, ",", &pp);
+    
+    int message_num=1;
+    while(pstr != NULL){
+        if(message_num>STAR_MAX_IP_NUM-1)
+            break;
+        strcpy(((s->app_ctx->pre_dns->star_DNS_list.list)[0].star_DNS_ip)[message_num], pstr);
+        message_num++;
+        av_log(NULL,AV_LOG_INFO,"http_redirect_ip message_num=%d, ptr =%s\n",message_num,pstr);
+        pstr = strtok_r(NULL, ",", &pp);
+    }
+    
+    s->app_ctx->pre_dns->star_DNS_list.list[0].num = message_num;
+    s->app_ctx->pre_dns->pre_dns_on = 1;
+    av_application_did_http_redirect_ip(s->app_ctx, (void*)h, s->redirect_ip);
+    
+    return 1;
+}
+
+
 /* return non zero if error */
-static int http_open_cnx(URLContext *h, AVDictionary **options)
+static int http_open_cnx(URLContext *h, AVDictionary **options, int seek_flag)
 {
     HTTPAuthType cur_auth_type, cur_proxy_auth_type;
     HTTPContext *s = h->priv_data;
     int location_changed, attempts = 0, redirects = 0;
+    if (seek_flag==0) {
+        av_log(s,AV_LOG_DEBUG,"chenwq: http will open, url=%s\n", s->location);
+        av_application_will_http_open(s->app_ctx, (void*)h, s->location);
+    }
 redo:
     av_dict_copy(options, s->chained_options, 0);
 
@@ -296,27 +491,131 @@ redo:
          s->http_code == 303 || s->http_code == 307) &&
         location_changed == 1) {
         /* url moved, get next */
-        ffurl_closep(&s->hd);
-        if (redirects++ >= MAX_REDIRECTS)
-            return AVERROR(EIO);
+        if (s->hd) {
+            ffurl_closep(&s->hd);
+        }
+        if (redirects++ >= MAX_REDIRECTS){
+            //return AVERROR(EIO);
+            goto fail;
+        }
+        
+        if(s->use_redirect_ip && s->redirect_ip){
+            http_redirect_ip_set_pre_dns(h);
+        }
+        
         /* Restart the authentication process with the new target, which
          * might use a different auth mechanism. */
         memset(&s->auth_state, 0, sizeof(s->auth_state));
         attempts         = 0;
         location_changed = 0;
+        //ffg_pss_set_http_redirect(1);
+        //ffg_pss_set_http_redirect_path(s->location);
+        if( s->app_ctx == NULL || s->app_ctx->pss == NULL )
+            goto fail;
+            
+        s->app_ctx->pss->redirect=1;
+        ffg_pss_set_http_redirect_path(s->app_ctx,s->location);
+        startimes_start_log(s->app_ctx, STAR_TIME_LOG_MAIN, "m3u8_redirect_complete = %lld", av_gettime()/1000);
+        startimes_start_log(s->app_ctx, STAR_TIME_LOG_MAIN, "m3u8_redirect_counts = %d", redirects);
+        av_application_did_http_redirected(s->app_ctx, (void*)h, s->location);
+        add_flow_log(s->app_ctx,s->url_start_status,FL_HTTP_RESPONSE_CODE,s->http_code);
+        add_flow_log(s->app_ctx,s->url_start_status,FL_HTTP_RESPONSE,av_gettime()/1000);
+        add_flow_log(s->app_ctx,s->url_start_status,FL_DOWNLOAD_ERROR_CODE, 0);
+        add_flow_log(s->app_ctx,s->url_start_status,FL_DOWNLOAD_FINISH,av_gettime()/1000);
         goto redo;
+    }
+    
+    add_flow_log(s->app_ctx,s->url_start_status,FL_HTTP_RESPONSE_CODE,s->http_code);
+    add_flow_log(s->app_ctx,s->url_start_status,FL_HTTP_RESPONSE,av_gettime()/1000);
+    
+       
+	if (s->app_ctx && s->url_start_status && (!s->url_start_status->complete)){
+		//m3u8_http_response timestamp is the same as m3u8_download_finish
+		if(s->url_start_status->status_type == STATUS_TYPE_ALT){
+			if(s->url_start_status->path_type==PATH_TS){
+				startimes_start_log(s->app_ctx, STAR_TIME_LOG_MAIN, "ts_http_response_audio = %lld",av_gettime()/1000);
+			}else if (s->url_start_status->path_type==PATH_KEY){
+				startimes_start_log(s->app_ctx, STAR_TIME_LOG_MAIN, "key_http_response_audio = %lld",av_gettime()/1000);
+			} 
+		}
+		else{
+			if(s->url_start_status->path_type==PATH_TS){
+				startimes_start_log(s->app_ctx, STAR_TIME_LOG_MAIN, "ts_http_response = %lld",av_gettime()/1000);
+			}else if (s->url_start_status->path_type==PATH_KEY){
+				startimes_start_log(s->app_ctx, STAR_TIME_LOG_MAIN, "key_http_response = %lld",av_gettime()/1000);
+			} 
+		}
+	}
+		
+    if (seek_flag==0) {
+        av_application_did_http_open(s->app_ctx, (void*)h, s->location, 0, s->http_code, s->is_hit_cache);
     }
     return 0;
 
 fail:
-    if (s->hd)
+    if (s->hd){
+        if( s->http_code == 404 )
+        {
+            av_log(s, AV_LOG_DEBUG, "http_response_code= %d\n", s->http_code);
+            add_flow_log(s->app_ctx,s->url_start_status,FL_HTTP_RESPONSE_CODE,s->http_code);
+            add_flow_log(s->app_ctx,s->url_start_status,FL_HTTP_RESPONSE,av_gettime()/1000);
+        }
+
+        
         ffurl_closep(&s->hd);
+    }
+    
     if (location_changed < 0)
         return location_changed;
-    return ff_http_averror(s->http_code, AVERROR(EIO));
+	
+	if (s->app_ctx && s->url_start_status && (!s->url_start_status->complete)){
+		if(s->url_start_status->status_type == STATUS_TYPE_ALT){
+			if(s->url_start_status->path_type==PATH_M3U8){
+				if (s->app_ctx->pss->redirect) {
+					startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_audio = %d",ERROR_REDIRECTED_M3U8_HTTP_RESPONSE_FAIL);
+				}else{
+					startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_audio = %d", ERROR_M3U8_HTTP_RESPONSE_FAIL );
+				}
+				startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_ex_audio = %d", s->http_code );
+			}else if(s->url_start_status->path_type==PATH_TS){
+				startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_audio = %d", ERROR_TS_HTTP_RESPONSE_FAIL );
+				startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_ex_audio = %d", s->http_code );
+			}else if(s->url_start_status->path_type==PATH_KEY){
+				startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_audio = %d", ERROR_KEY_HTTP_RESPONSE_FAIL );
+				startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_ex_audio = %d", s->http_code );
+			}
+		}
+		else{
+			if(s->url_start_status->path_type==PATH_M3U8){
+				if (s->app_ctx->pss->redirect) {
+					startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code = %d",ERROR_REDIRECTED_M3U8_HTTP_RESPONSE_FAIL);
+				}else{
+					startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code = %d", ERROR_M3U8_HTTP_RESPONSE_FAIL );
+				}
+				startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_ex = %d", s->http_code );
+			}else if(s->url_start_status->path_type==PATH_TS){
+				startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code = %d", ERROR_TS_HTTP_RESPONSE_FAIL );
+				startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_ex = %d", s->http_code );
+			}else if(s->url_start_status->path_type==PATH_KEY){
+				startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code = %d", ERROR_KEY_HTTP_RESPONSE_FAIL );
+				startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_ex = %d", s->http_code );
+			}else if(s->url_start_status->path_type==PATH_MP4){
+				startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code = %d", ERROR_MP4_HTTP_RESPONSE_FAIL );
+				startimes_error_log(s->app_ctx, STAR_TIME_LOG_MAIN, "error_code_ex = %d", s->http_code );
+			}
+			
+		}
+	}
+	
+	
+    int ret = ff_http_averror(s->http_code, AVERROR(EIO));
+    if (seek_flag==0) {
+        av_application_did_http_open(s->app_ctx, (void*)h, s->location, ret, s->http_code, s->is_hit_cache);
+    }
+    return ret;
 }
 
-int ff_http_do_new_request(URLContext *h, const char *uri)
+int ff_http_do_new_request(URLContext *h, const char *uri, AVDictionary **opts)
 {
     HTTPContext *s = h->priv_data;
     AVDictionary *options = NULL;
@@ -358,11 +657,30 @@ int ff_http_do_new_request(URLContext *h, const char *uri)
     s->icy_data_read = 0;
     av_free(s->location);
     s->location = av_strdup(uri);
+	
+	if(s->app_ctx)
+		s->app_ctx->m3u8_read_size = 0;
+	
+    //strcpy(h->filename, uri);
     if (!s->location)
         return AVERROR(ENOMEM);
+	
+    if( opts != NULL )
+    {
+        AVDictionary *tmp_opts = NULL;
+        av_dict_copy(&tmp_opts, *opts,0);
+        if ((ret = av_opt_set_dict(s, &tmp_opts)) < 0)
+            return ret;
+        
+        av_dict_free(&tmp_opts);
+    }
+    else
+    {
+        if ((ret = av_opt_set_dict(s, opts)) < 0)
+            return ret;
+    }
 
-    av_log(s, AV_LOG_INFO, "Opening \'%s\' for %s\n", uri, h->flags & AVIO_FLAG_WRITE ? "writing" : "reading");
-    ret = http_open_cnx(h, &options);
+    ret = http_open_cnx(h, &options, 0);
     av_dict_free(&options);
     return ret;
 }
@@ -536,8 +854,22 @@ static int http_open(URLContext *h, const char *uri, int flags,
 {
     HTTPContext *s = h->priv_data;
     int ret;
+	
+	//it doesn't need t open http when the uri contain the master info
+	if( h->args.info != NULL && h->args.info_len > 0 ){
+		s->filesize = h->args.info_len;
+		return 0;
+	}
 
-    s->app_ctx = (AVApplicationContext *)av_dict_strtoptr(s->app_ctx_intptr);
+    s->app_ctx = (AVApplicationContext *)(intptr_t)s->app_ctx_intptr;
+	s->url_start_status = (URLStartStatus *)(intptr_t)s->url_start_status_intptr;
+	
+	//the first network connection url_start_status is NULL when the first network connection status is empty.so we use the uss_default
+	if(s->url_start_status == NULL){
+		if (s->app_ctx){
+			s->url_start_status = s->app_ctx->uss_default;
+		}	
+	}
 
     if( s->seekable == 1 )
         h->is_streamed = 0;
@@ -568,11 +900,12 @@ static int http_open(URLContext *h, const char *uri, int flags,
     if (s->listen) {
         return http_listen(h, uri, flags, options);
     }
-    av_application_will_http_open(s->app_ctx, (void*)h, uri);
-    ret = http_open_cnx(h, options);
-    av_application_did_http_open(s->app_ctx, (void*)h, uri, ret, s->http_code, s->filesize);
-    if (ret < 0)
+   //av_application_will_http_open(s->app_ctx, (void*)h, uri);
+    ret = http_open_cnx(h, options, 0);
+    //av_application_did_http_open(s->app_ctx, (void*)h, uri, ret, s->http_code, s->is_hit_cache);
+    if (ret < 0){
         av_dict_free(&s->chained_options);
+    }
     return ret;
 }
 
@@ -1016,6 +1349,22 @@ static int process_line(URLContext *h, char *line, int line_count,
         } else if (!av_strcasecmp(tag, "Content-Type")) {
             av_free(s->mime_type);
             s->mime_type = av_strdup(p);
+        }else if (!av_strcasecmp(tag, "X-Cache")) {
+            if (av_strnstr(p, "Hit", strlen(p))) {
+                s->is_hit_cache = 1;
+            }else{
+                s->is_hit_cache = 0;
+            }
+        }else if (!av_strcasecmp(tag, "X-Cache-IP")){
+
+            if (s->redirect_ip){
+                av_free(s->redirect_ip);
+			}
+            s->redirect_ip = av_strdup(p);
+            
+        }else if (!av_strcasecmp(tag, "Content-Type")) {
+            av_free(s->mime_type);
+            s->mime_type = av_strdup(p);
         } else if (!av_strcasecmp(tag, "Set-Cookie")) {
             if (parse_cookie(s, p, &s->cookie_dict))
                 av_log(h, AV_LOG_WARNING, "Unable to parse '%s'\n", p);
@@ -1025,7 +1374,16 @@ static int process_line(URLContext *h, char *line, int line_count,
             if ((ret = parse_icy(s, tag, p)) < 0)
                 return ret;
         } else if (!av_strcasecmp(tag, "Content-Encoding")) {
-            if ((ret = parse_content_encoding(h, p)) < 0)
+			if (s->app_ctx && s->url_start_status && (!s->url_start_status->complete)){
+				if(s->url_start_status->status_type == STATUS_TYPE_ALT){
+					startimes_start_log(s->app_ctx, STAR_TIME_LOG_MAIN, "m3u8_compressed_audio = 1");
+				}
+				else{
+					startimes_start_log(s->app_ctx, STAR_TIME_LOG_MAIN, "m3u8_compressed = 1");
+				}
+			}
+
+        	if ((ret = parse_content_encoding(h, p)) < 0)
                 return ret;
         }
     }
@@ -1045,7 +1403,7 @@ static int get_cookies(HTTPContext *s, char **cookies, const char *path,
     // cookie strings will look like Set-Cookie header field values.  Multiple
     // Set-Cookie fields will result in multiple values delimited by a newline
     int ret = 0;
-    char *cookie, *set_cookies = av_strdup(s->cookies), *next = set_cookies;
+    char *next, *cookie, *set_cookies = av_strdup(s->cookies), *cset_cookies = set_cookies;
 
     if (!set_cookies) return AVERROR(EINVAL);
 
@@ -1053,81 +1411,95 @@ static int get_cookies(HTTPContext *s, char **cookies, const char *path,
     av_dict_free(&s->cookie_dict);
 
     *cookies = NULL;
-    while ((cookie = av_strtok(next, "\n", &next))) {
-        AVDictionary *cookie_params = NULL;
-        AVDictionaryEntry *cookie_entry, *e;
+    while ((cookie = av_strtok(set_cookies, "\n", &next))) {
+        int domain_offset = 0;
+        char *param, *next_param, *cdomain = NULL, *cpath = NULL, *cvalue = NULL;
+        set_cookies = NULL;
 
         // store the cookie in a dict in case it is updated in the response
         if (parse_cookie(s, cookie, &s->cookie_dict))
             av_log(s, AV_LOG_WARNING, "Unable to parse '%s'\n", cookie);
 
-        // continue on to the next cookie if this one cannot be parsed
-        if (parse_set_cookie(cookie, &cookie_params))
-            continue;
-
-        // if the cookie has no value, skip it
-        cookie_entry = av_dict_get(cookie_params, "", NULL, AV_DICT_IGNORE_SUFFIX);
-        if (!cookie_entry || !cookie_entry->value) {
-            av_dict_free(&cookie_params);
-            continue;
-        }
-
-        // if the cookie has expired, don't add it
-        if ((e = av_dict_get(cookie_params, "expires", NULL, 0)) && e->value) {
-            struct tm tm_buf = {0};
-            if (!parse_set_cookie_expiry_time(e->value, &tm_buf)) {
-                if (av_timegm(&tm_buf) < av_gettime() / 1000000) {
-                    av_dict_free(&cookie_params);
-                    continue;
-                }
+        while ((param = av_strtok(cookie, "; ", &next_param))) {
+            if (cookie) {
+                // first key-value pair is the actual cookie value
+                cvalue = av_strdup(param);
+                cookie = NULL;
+            } else if (!av_strncasecmp("path=",   param, 5)) {
+                av_free(cpath);
+                cpath = av_strdup(&param[5]);
+            } else if (!av_strncasecmp("domain=", param, 7)) {
+                // if the cookie specifies a sub-domain, skip the leading dot thereby
+                // supporting URLs that point to sub-domains and the master domain
+                int leading_dot = (param[7] == '.');
+                av_free(cdomain);
+                cdomain = av_strdup(&param[7+leading_dot]);
+            } else {
+                // ignore unknown attributes
             }
         }
+        if (!cdomain)
+            cdomain = av_strdup(domain);
 
-        // if no domain in the cookie assume it appied to this request
-        if ((e = av_dict_get(cookie_params, "domain", NULL, 0)) && e->value) {
-            // find the offset comparison is on the min domain (b.com, not a.b.com)
-            int domain_offset = strlen(domain) - strlen(e->value);
-            if (domain_offset < 0) {
-                av_dict_free(&cookie_params);
-                continue;
-            }
-
-            // match the cookie domain
-            if (av_strcasecmp(&domain[domain_offset], e->value)) {
-                av_dict_free(&cookie_params);
-                continue;
-            }
+        
+        if (!cdomain || !cvalue) {
+            av_log(s, AV_LOG_WARNING,
+                   "Invalid cookie found, no value or domain specified\n");
+            goto done_cookie;
         }
+        /*
+         // ensure all of the necessary values are valid
+         if (!cdomain || !cpath || !cvalue) {
+         av_log(s, AV_LOG_WARNING,
+         "Invalid cookie found, no value, path or domain specified\n");
+         goto done_cookie;
+         }
+         
+         // check if the request path matches the cookie path
+         if (av_strncasecmp(path, cpath, strlen(cpath)))
+         goto done_cookie;
+       */
+        
+        // the domain should be at least the size of our cookie domain
+        domain_offset = strlen(domain) - strlen(cdomain);
+        if (domain_offset < 0)
+            goto done_cookie;
 
-        // ensure this cookie matches the path
-        e = av_dict_get(cookie_params, "path", NULL, 0);
-        if (!e || av_strncasecmp(path, e->value, strlen(e->value))) {
-            av_dict_free(&cookie_params);
-            continue;
-        }
+        // match the cookie domain
+        if (av_strcasecmp(&domain[domain_offset], cdomain))
+            goto done_cookie;
 
         // cookie parameters match, so copy the value
         if (!*cookies) {
-            if (!(*cookies = av_asprintf("%s=%s", cookie_entry->key, cookie_entry->value))) {
+            if (!(*cookies = av_strdup(cvalue))) {
                 ret = AVERROR(ENOMEM);
-                break;
+                goto done_cookie;
             }
         } else {
             char *tmp = *cookies;
-            size_t str_size = strlen(cookie_entry->key) + strlen(cookie_entry->value) + strlen(*cookies) + 4;
+            size_t str_size = strlen(cvalue) + strlen(*cookies) + 3;
             if (!(*cookies = av_malloc(str_size))) {
                 ret = AVERROR(ENOMEM);
-                av_free(tmp);
-                break;
+                goto done_cookie;
             }
-            snprintf(*cookies, str_size, "%s; %s=%s", tmp, cookie_entry->key, cookie_entry->value);
+            snprintf(*cookies, str_size, "%s; %s", tmp, cvalue);
             av_free(tmp);
+        }
+
+done_cookie:
+        av_freep(&cdomain);
+        av_freep(&cpath);
+        av_freep(&cvalue);
+        if (ret < 0) {
+            if (*cookies) av_freep(cookies);
+            av_free(cset_cookies);
+            return ret;
         }
     }
 
-    av_free(set_cookies);
+    av_free(cset_cookies);
 
-    return ret;
+    return 0;
 }
 
 static inline int has_header(const char *str, const char *header)
@@ -1145,6 +1517,9 @@ static int http_read_header(URLContext *h, int *new_location)
     int err = 0;
 
     s->chunksize = UINT64_MAX;
+#if CONFIG_ZLIB
+    s->compressed = 0;
+#endif
 
     for (;;) {
         if ((err = http_get_line(s, line, sizeof(line))) < 0)
@@ -1170,9 +1545,44 @@ static int http_read_header(URLContext *h, int *new_location)
     return err;
 }
 
+
+static int get_http_header_user_info(URLContext *h, char* buf, int bufsize){
+    HTTPContext *s = h->priv_data;
+    memset(buf, 0, bufsize);
+    char* user_id = NULL;
+    char* device_id = NULL;
+    char* event_id = NULL;
+    char* play_id = NULL;
+    ff_get_player_option(s->app_ctx, OPT_LICENSE_USER_ID, &user_id);
+    ff_get_player_option(s->app_ctx, OPT_LICENSE_DEVICE_ID, &device_id);
+    ff_get_player_option(s->app_ctx, OPT_PLAYER_EVENT_ID, &event_id);
+    ff_get_player_option(s->app_ctx, OPT_PLAYER_PLAY_ID, &play_id);
+    int len = 0;
+    if (user_id!=NULL) {
+        len += av_strlcatf(buf + len, bufsize - len, "X-UserID: %s\r\n", user_id);
+        av_free(user_id);
+    }
+    
+    if (device_id!=NULL) {
+        len += av_strlcatf(buf + len, bufsize - len, "X-DeviceID: %s\r\n", device_id);
+        av_free(device_id);
+    }
+    
+    if (event_id!=NULL) {
+        len += av_strlcatf(buf + len, bufsize - len, "X-EventID: %s\r\n", event_id);
+        av_free(event_id);
+    }
+    
+    if (play_id!=NULL) {
+        len += av_strlcatf(buf + len, bufsize - len, "X-PlayID: %s\r\n", play_id);
+        av_free(play_id);
+    }
+    return len;
+}
+
 static int http_connect(URLContext *h, const char *path, const char *local_path,
                         const char *hoststr, const char *auth,
-                        const char *proxyauth, int *new_location)
+                        const char *proxyauth, int *new_location, int* send_fail)
 {
     HTTPContext *s = h->priv_data;
     int post, err;
@@ -1270,6 +1680,13 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
     if (!has_header(s->headers, "\r\nContent-Type: ") && s->content_type)
         len += av_strlcatf(headers + len, sizeof(headers) - len,
                            "Content-Type: %s\r\n", s->content_type);
+    
+    if (!has_header(s->headers, "\r\nAuthorization: ") && s->authorization)
+        len += av_strlcatf(headers + len, sizeof(headers) - len,
+                           "Authorization: Bearer %s\r\n", s->authorization);
+    
+    //cookie from server
+    char *cookies = NULL;
     if (!has_header(s->headers, "\r\nCookie: ") && s->cookies) {
         char *cookies = NULL;
         if (!get_cookies(s, &cookies, path, hoststr) && cookies) {
@@ -1278,9 +1695,66 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
             av_free(cookies);
         }
     }
+    
+    //cookie from custom
+    char* cookie_custom = NULL;
+    ret = ff_get_player_option(s->app_ctx,"cookies", &cookie_custom );
+    if(!ret){
+        //cookies format should below:
+        //  Cookie: CloudFront-Signature=xxxx; CloudFront-Policy=xxxx; CloudFront-Key-Pair-Id=xxxx;\r\n
+        //  Carrier: 运营商标记;\r\n
+        //  Free-traffic: true/false(免流量标记);
+		
+       // cookies is only cookie now,not use old type //2020-08-011
+		
+        //char* cookie_valid = av_strnstr(cookie_custom, "Cookie:", strlen(cookie_custom));
+        //if (cookies!=NULL&&cookie_valid!=NULL) {
+		if (cookies != NULL){
+           len += av_strlcatf(headers + len, sizeof(headers) - len, " %s", cookie_custom);
+			//len += av_strlcat(headers + len, cookie_custom + strlen("Cookie:"), sizeof(headers) - len);
+        }else{
+			len += av_strlcatf(headers + len, sizeof(headers) - len, "Cookie: %s", cookie_custom);
+            //len += av_strlcat(headers + len, cookie_custom, sizeof(headers) - len);
+        }
+        
+        //if the headers not end "\r\n"
+        if( strcmp("\r\n", headers + len - 2) != 0 )
+        {
+            len += av_strlcat(headers + len, "\r\n", sizeof(headers)-len);
+        }
+        
+        
+    }else if(cookies!=NULL){
+        len += av_strlcat(headers + len, "\r\n", sizeof(headers)-len);
+    }
+    
+    if (cookies!=NULL) {
+        av_free(cookies);
+    }
+    if (cookie_custom!=NULL) {
+        av_free(cookie_custom);
+    }
+    
     if (!has_header(s->headers, "\r\nIcy-MetaData: ") && s->icy)
         len += av_strlcatf(headers + len, sizeof(headers) - len,
                            "Icy-MetaData: %d\r\n", 1);
+
+    if (av_match_ext(path, "m3u8")) {
+    	if (!has_header(s->headers, "\r\nAccept-Encoding: "))
+    		len += av_strlcatf(headers + len, sizeof(headers) - len,
+    				"Accept-Encoding: gzip\r\n");
+
+    	if (!has_header(s->headers, "\r\nContent-Type: "))
+    		len += av_strlcatf(headers + len, sizeof(headers) - len,
+    				"Content-Type: text/plain\r\n");
+    }
+    
+    //add user info header
+    char header_user[1024];
+    int header_user_len = get_http_header_user_info(h, header_user, sizeof(header_user));
+    if (header_user_len>0) {
+        len += av_strlcatf(headers + len, sizeof(headers) - len, "%s", header_user);
+    }
 
     /* now add in custom headers */
     if (s->headers)
@@ -1314,8 +1788,10 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
         goto done;
 
     if (s->post_data)
-        if ((err = ffurl_write(s->hd, s->post_data, s->post_datalen)) < 0)
+        if ((err = ffurl_write(s->hd, s->post_data, s->post_datalen)) < 0){
+            *send_fail = err;
             goto done;
+        }
 
     /* init input buffer */
     s->buf_ptr          = s->buffer;
@@ -1327,6 +1803,7 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
     s->willclose        = 0;
     s->end_chunked_post = 0;
     s->end_header       = 0;
+    s->http_code        = 0;
 #if CONFIG_ZLIB
     s->compressed       = 0;
 #endif
@@ -1338,6 +1815,8 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
         err = 0;
         goto done;
     }
+    
+    int64_t timebegin = av_gettime()/1000;
 
     /* wait for header */
     err = http_read_header(h, new_location);
@@ -1387,8 +1866,19 @@ static int http_buf_read(URLContext *h, uint8_t *buf, int size)
                    "Chunked encoding data size: %"PRIu64"\n",
                     s->chunksize);
 
-            if (!s->chunksize)
+            if (!s->chunksize && s->multiple_requests) {
+                http_get_line(s, line, sizeof(line)); // read empty chunk
+                s->chunkend = 1;
                 return 0;
+            }
+            else if (!s->chunksize){
+				av_log(h, AV_LOG_DEBUG, "Last chunk received,off is %"PRId64"\n",s->off);
+				add_flow_log(s->app_ctx,s->url_start_status,FL_FILE_SIZE,s->off);
+				add_flow_log(s->app_ctx,s->url_start_status,FL_DOWNLOAD_ERROR_CODE, 0);
+				add_flow_log(s->app_ctx,s->url_start_status,FL_DOWNLOAD_FINISH,av_gettime()/1000);
+                ffurl_closep(&s->hd);
+				return 0;
+			}
             else if (s->chunksize == UINT64_MAX) {
                 av_log(h, AV_LOG_ERROR, "Invalid chunk size %"PRIu64"\n",
                        s->chunksize);
@@ -1407,9 +1897,12 @@ static int http_buf_read(URLContext *h, uint8_t *buf, int size)
         s->buf_ptr += len;
     } else {
         uint64_t target_end = s->end_off ? s->end_off : s->filesize;
-        if ((!s->willclose || s->chunksize == UINT64_MAX) && s->off >= target_end)
-            return AVERROR_EOF;
-
+        if ((!s->willclose || s->chunksize == UINT64_MAX) &&target_end >= 0 && s->off >= target_end){
+			add_flow_log(s->app_ctx,s->url_start_status,FL_FILE_SIZE,s->filesize);
+            add_flow_log(s->app_ctx,s->url_start_status,FL_DOWNLOAD_ERROR_CODE, 0);
+            add_flow_log(s->app_ctx,s->url_start_status,FL_DOWNLOAD_FINISH,av_gettime()/1000);
+			return AVERROR_EOF;
+		}
         len = size;
         if (s->filesize > 0 && s->filesize != UINT64_MAX && s->filesize != 2147483647) {
             int64_t unread = s->filesize - s->off;
@@ -1418,7 +1911,7 @@ static int http_buf_read(URLContext *h, uint8_t *buf, int size)
         }
         if (len > 0)
             len = ffurl_read(s->hd, buf, len);
-        if (!len && (!s->willclose || s->chunksize == UINT64_MAX) && s->off < target_end) {
+        if (!len && (!s->willclose || s->chunksize == UINT64_MAX) &&target_end >= 0 && s->off < target_end) {
             av_log(h, AV_LOG_ERROR,
                    "Stream ends prematurely at %"PRIu64", should be %"PRIu64"\n",
                    s->off, target_end
@@ -1428,9 +1921,31 @@ static int http_buf_read(URLContext *h, uint8_t *buf, int size)
     }
     if (len > 0) {
         s->off += len;
-        if (s->chunksize > 0 && s->chunksize != UINT64_MAX) {
-            av_assert0(s->chunksize >= len);
-            s->chunksize -= len;
+        if (s->chunksize > 0 && s->chunksize != UINT64_MAX ){
+			 av_assert0(s->chunksize >= len);
+		    s->chunksize -= len;
+		}
+    }
+	
+	if(av_strnstr(s->location, ".m3u8", strlen(s->location))){
+		if(s->app_ctx && (!s->app_ctx->pss->complete))
+			s->app_ctx->m3u8_read_size += len;
+		av_log(NULL, AV_LOG_DEBUG, "m3u8_optimize: m3u8 read data,total:%lld, len:%lld\n", s->app_ctx->m3u8_read_size, len );
+		
+	}
+	
+    int64_t target_end = s->end_off ? s->end_off : s->filesize;
+    if ((!s->willclose || s->chunksize == UINT64_MAX) &&
+        target_end >= 0 && s->off >= target_end)
+    {
+        if( s != NULL && s->app_ctx != NULL && s->app_ctx->pss && s->app_ctx->pss->media_type == AV_SEPARATE )
+        {
+            if( s->url_start_status && s->url_start_status->path_type == PATH_TS )
+            {
+                add_flow_log(s->app_ctx,s->url_start_status,FL_FILE_SIZE,s->filesize);
+                add_flow_log(s->app_ctx,s->url_start_status,FL_DOWNLOAD_ERROR_CODE, 0);
+                add_flow_log(s->app_ctx,s->url_start_status,FL_DOWNLOAD_FINISH,av_gettime()/1000);
+            }
         }
     }
     return len;
@@ -1488,39 +2003,53 @@ static int http_read_stream(URLContext *h, uint8_t *buf, int size)
     }
 
 #if CONFIG_ZLIB
-    if (s->compressed)
+    if (s->compressed){
+        av_log(NULL, AV_LOG_DEBUG, "http read compressed body, url=%s\n", s->location);
         return http_buf_read_compressed(h, buf, size);
+    }
 #endif /* CONFIG_ZLIB */
     read_ret = http_buf_read(h, buf, size);
-    while (read_ret < 0) {
+    if(read_ret>0)
+	{
+        if(av_strnstr(s->location, ".m3u8", strlen(s->location)))
+		{
+            av_log(NULL, AV_LOG_DEBUG, "http read body len=%d, url=%s\n", read_ret, s->location);
+        }
+    }
+    
+    
+    if (   (read_ret  < 0 && s->reconnect        && (!h->is_streamed || s->reconnect_streamed) && s->filesize > 0 && s->off < s->filesize)
+        || (read_ret == 0 && s->reconnect_at_eof && (!h->is_streamed || s->reconnect_streamed)))
+	 {
         uint64_t target = h->is_streamed ? 0 : s->off;
 
         if (read_ret == AVERROR_EXIT)
-            break;
+             return read_ret;
 
         if (h->is_streamed && !s->reconnect_streamed)
-            break;
+             return read_ret;
 
         if (!(s->reconnect && s->filesize > 0 && s->off < s->filesize) &&
             !(s->reconnect_at_eof && read_ret == AVERROR_EOF))
-            break;
+             return read_ret;
 
         if (reconnect_delay > s->reconnect_delay_max)
             return AVERROR(EIO);
+        if (s->reconnect_delay > s->reconnect_delay_max)
+            return AVERROR(EIO);
 
-        av_log(h, AV_LOG_WARNING, "Will reconnect at %"PRIu64" in %d second(s), error=%s.\n", s->off, reconnect_delay, av_err2str(read_ret));
-        err = ff_network_sleep_interruptible(1000U*1000*reconnect_delay, &h->interrupt_callback);
-        if (err != AVERROR(ETIMEDOUT))
-            return err;
-        reconnect_delay = 1 + 2*reconnect_delay;
+        av_log(h, AV_LOG_INFO, "Will reconnect at %"PRIu64" error=%s.\n", s->off, av_err2str(read_ret));
+        av_usleep(1000U*1000*s->reconnect_delay);
+        s->reconnect_delay = 1 + 2*s->reconnect_delay;
         seek_ret = http_seek_internal(h, target, SEEK_SET, 1);
-        if (seek_ret >= 0 && seek_ret != target) {
+        if (seek_ret != target) {
             av_log(h, AV_LOG_ERROR, "Failed to reconnect at %"PRIu64".\n", target);
             return read_ret;
         }
 
         read_ret = http_buf_read(h, buf, size);
-    }
+    } else
+        s->reconnect_delay = 0;
 
     return read_ret;
 }
@@ -1569,11 +2098,10 @@ static int store_icy(URLContext *h, int size)
 {
     HTTPContext *s = h->priv_data;
     /* until next metadata packet */
-    uint64_t remaining;
+    int remaining = s->icy_metaint - s->icy_data_read;
 
-    if (s->icy_metaint < s->icy_data_read)
+    if (remaining < 0)
         return AVERROR_INVALIDDATA;
-    remaining = s->icy_metaint - s->icy_data_read;
 
     if (!remaining) {
         /* The metadata packet is variable sized. It has a 1 byte header
@@ -1677,8 +2205,17 @@ static int http_close(URLContext *h)
         /* Close the write direction by sending the end of chunked encoding. */
         ret = http_shutdown(h, h->flags);
 
-    if (s->hd)
+    if (s->hd){
+        int64_t target_end = s->end_off ? s->end_off : s->filesize;
+        if (target_end >= 0 && s->off < target_end){
+            add_flow_log(s->app_ctx,s->url_start_status,FL_FILE_SIZE,s->filesize);
+            add_flow_log(s->app_ctx,s->url_start_status,FL_READ_SIZE,s->off);
+            add_flow_log(s->app_ctx,s->url_start_status,FL_DOWNLOAD_ERROR_CODE, AVERROR_EXIT);
+            add_flow_log(s->app_ctx,s->url_start_status,FL_DOWNLOAD_FINISH,av_gettime()/1000);
+        }
+        s->hd->protocol_close = h->protocol_close;
         ffurl_closep(&s->hd);
+    }
     av_dict_free(&s->chained_options);
     return ret;
 }
@@ -1721,7 +2258,7 @@ static int64_t http_seek_internal(URLContext *h, int64_t off, int whence, int fo
 
     /* if it fails, continue on old connection */
     av_application_will_http_seek(s->app_ctx, (void*)h, s->location, off);
-    if ((ret = http_open_cnx(h, &options)) < 0) {
+    if ((ret = http_open_cnx(h, &options, 1)) < 0) {
         av_application_did_http_seek(s->app_ctx, (void*)h, s->location, off, ret, s->http_code);
         av_dict_free(&options);
         memcpy(s->buffer, old_buf, old_buf_size);
@@ -1753,12 +2290,21 @@ static int http_get_short_seek(URLContext *h)
     HTTPContext *s = h->priv_data;
     return ffurl_get_short_seek(s->hd);
 }
+static void *httpcontext_child_next(void *obj, void *prev)
+{
+    struct HTTPContext *h = obj;
+    if (!prev && h->hd)
+        return h->hd;
+    return NULL;
+}
+
 
 #define HTTP_CLASS(flavor)                          \
 static const AVClass flavor ## _context_class = {   \
     .class_name = # flavor,                         \
     .item_name  = av_default_item_name,             \
     .option     = options,                          \
+    .child_next = httpcontext_child_next,          \
     .version    = LIBAVUTIL_VERSION_INT,            \
 }
 
@@ -1780,7 +2326,7 @@ const URLProtocol ff_http_protocol = {
     .priv_data_size      = sizeof(HTTPContext),
     .priv_data_class     = &http_context_class,
     .flags               = URL_PROTOCOL_FLAG_NETWORK,
-    .default_whitelist   = "http,https,tls,rtp,tcp,udp,crypto,httpproxy"
+    .default_whitelist   = "http,https,tls,rtp,tcp,udp,crypto,httpproxy,file"
 };
 #endif /* CONFIG_HTTP_PROTOCOL */
 
@@ -1800,7 +2346,7 @@ const URLProtocol ff_https_protocol = {
     .priv_data_size      = sizeof(HTTPContext),
     .priv_data_class     = &https_context_class,
     .flags               = URL_PROTOCOL_FLAG_NETWORK,
-    .default_whitelist   = "http,https,tls,rtp,tcp,udp,crypto,httpproxy"
+    .default_whitelist   = "http,https,tls,rtp,tcp,udp,crypto,httpproxy,file"
 };
 #endif /* CONFIG_HTTPS_PROTOCOL */
 
@@ -1824,7 +2370,18 @@ static int http_proxy_open(URLContext *h, const char *uri, int flags)
     char *authstr;
     int new_loc;
 
-    s->app_ctx = (AVApplicationContext *)av_dict_strtoptr(s->app_ctx_intptr);
+    s->app_ctx = (AVApplicationContext *)(intptr_t)s->app_ctx_intptr;
+	s->url_start_status = (URLStartStatus *)(intptr_t)s->url_start_status_intptr;
+	
+	//the first network connection url_start_status is NULL when the first network connection status is empty.so we use the uss_default
+	if(s->url_start_status == NULL){
+		if (s->app_ctx){
+			s->url_start_status = s->app_ctx->uss_default;
+		}	
+	}
+	
+	if(s->app_ctx)
+		s->app_ctx->m3u8_read_size = 0;
 
     if( s->seekable == 1 )
         h->is_streamed = 0;

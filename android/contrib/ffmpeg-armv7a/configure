@@ -1724,6 +1724,7 @@ EXTERNAL_LIBRARY_LIST="
     mediacodec
     openal
     opengl
+    openssl
 "
 
 HWACCEL_AUTODETECT_LIBRARY_LIST="

@@ -26,6 +26,7 @@
 
 #include "avio.h"
 #include "libavformat/version.h"
+#include "libavutil/application.h"
 
 #include "libavutil/dict.h"
 #include "libavutil/log.h"
@@ -34,6 +35,21 @@
 #define URL_PROTOCOL_FLAG_NETWORK       2 /*< The protocol uses network */
 
 extern const AVClass ffurl_context_class;
+
+
+typedef struct url_args_org{
+    char info[4096];
+    char lang[64];
+    char gzip[16];  //on/off
+}url_args_org;
+
+
+typedef struct url_args{
+    char *info;    //max len 10240
+    int binfo;
+    int info_len;
+    char lang[64];
+}url_args;
 
 typedef struct URLContext {
     const AVClass *av_class;    /**< information for av_log(). Set by url_open(). */
@@ -49,6 +65,9 @@ typedef struct URLContext {
     const char *protocol_whitelist;
     const char *protocol_blacklist;
     int min_packet_size;        /**< if non zero, the stream is packetized with this min packet size */
+    int protocol_close;
+    AVApplicationContext *app_ctx;
+    url_args args;
 } URLContext;
 
 typedef struct URLProtocol {
@@ -340,4 +359,6 @@ const AVClass *ff_urlcontext_child_class_next(const AVClass *prev);
 const URLProtocol **ffurl_get_protocols(const char *whitelist,
                                         const char *blacklist);
 
+
+void handle_url_args(struct url_args_org *args, const char *key, int key_len, char **dest, int *dest_len);
 #endif /* AVFORMAT_URL_H */

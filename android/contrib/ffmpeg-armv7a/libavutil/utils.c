@@ -21,6 +21,9 @@
 #include "avassert.h"
 #include "samplefmt.h"
 #include "internal.h"
+#if CONFIG_ZLIB
+#include <zlib.h>
+#endif /* CONFIG_ZLIB */
 
 /**
  * @file
@@ -144,6 +147,36 @@ char *av_fourcc_make_string(char *buf, uint32_t fourcc)
 AVRational av_get_time_base_q(void)
 {
     return (AVRational){1, AV_TIME_BASE};
+}
+
+int av_zlib_decompress(uint8_t* src, int src_len, uint8_t* dst, int dst_len){
+    if (src==NULL||dst==NULL||src_len<=0){
+        av_log(NULL, AV_LOG_ERROR, "avio_unzip: invalie input params\n");
+        return -1;
+    }
+    z_stream inflate_stream = {0};
+    inflate_stream.zalloc = Z_NULL;
+    inflate_stream.zfree  = Z_NULL;
+    inflate_stream.opaque = Z_NULL;
+    inflate_stream.next_in  = src;
+    inflate_stream.avail_in = src_len;
+    memset(dst, 0, dst_len);
+    inflate_stream.next_out  = dst;
+    inflate_stream.avail_out = dst_len;
+    int ret = inflateInit2(&inflate_stream, 32 + 15);
+    if ( ret != Z_OK){
+        av_log(NULL, AV_LOG_ERROR, "avio_unzip: fail to inflateInit , ret=%d \n", ret);
+        return -2;
+    }
+    
+    ret = inflate(&inflate_stream, Z_SYNC_FLUSH);
+    inflateEnd(&inflate_stream);
+    if (ret != Z_OK && ret != Z_STREAM_END){
+        av_log(NULL, AV_LOG_ERROR, "avio_unzip: fail to inflate data, ret=%d, error=%s\n", ret, inflate_stream.msg);
+        return -3;
+    }
+    av_log(NULL, AV_LOG_DEBUG, "avio_unzip: inflate success ret=%d, outlen=\n", ret, inflate_stream.total_out);
+    return inflate_stream.total_out;
 }
 
 void av_assert0_fpu(void) {

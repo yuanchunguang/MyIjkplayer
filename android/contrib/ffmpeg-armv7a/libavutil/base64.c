@@ -30,7 +30,9 @@
 #include "timer.h"
 
 /* ---------------- private code */
-static const uint8_t map2[256] =
+//base64char value table map to ascii table
+//the value is base64char value in base64 encode table
+static const uint8_t g_map2_org[256] =
 {
     0xfe, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -38,7 +40,6 @@ static const uint8_t map2[256] =
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff,
-
     0x3e, 0xff, 0xff, 0xff, 0x3f, 0x34, 0x35, 0x36,
     0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0xff,
     0xff, 0xff, 0xfe, 0xff, 0xff, 0xff, 0x00, 0x01,
@@ -76,8 +77,17 @@ static const uint8_t map2[256] =
     v = i ? (v << 6) + bits : bits; \
 } while(0)
 
-int av_base64_decode(uint8_t *out, const char *in_str, int out_size)
+static int av_base64_decode_inner(uint8_t *out, const char *in_str, int out_size, int urlsafe)
 {
+    char map2[256] = {0};
+    memcpy(map2, g_map2_org, sizeof(map2));
+    if (urlsafe) {
+        map2['+'] = 0xff;
+        map2['/'] = 0xff;
+        map2['-'] = 0x3e;
+        map2['_'] = 0x3f;
+    }
+    
     uint8_t *dst = out;
     uint8_t *end = out + out_size;
     // no sign extension
@@ -129,16 +139,28 @@ out0:
     return bits & 1 ? AVERROR_INVALIDDATA : dst - out;
 }
 
+//base64 url safe decode
+int av_base64_decode(uint8_t *out, const char *in_str, int out_size){
+    return av_base64_decode_inner(out, in_str, out_size, 0);
+}
+int av_base64_decode_urlsafe(uint8_t *out, const char *in_str, int out_size){
+    return av_base64_decode_inner(out, in_str, out_size, 1);
+}
+
 /*****************************************************************************
 * b64_encode: Stolen from VLC's http.c.
 * Simplified by Michael.
 * Fixed edge cases and made it work from data (vs. strings) by Ryan.
 *****************************************************************************/
-
-char *av_base64_encode(char *out, int out_size, const uint8_t *in, int in_size)
+static char *av_base64_encode_inner(char *out, int out_size, const uint8_t *in, int in_size, int urlsafe )
 {
-    static const char b64[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    //url safe base64 table, change char of '+' '/' to '-' and '_', no padding
+    char b64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    if (urlsafe) {
+        b64[62] = '-';
+        b64[63] = '_';
+    }
+    
     char *ret, *dst;
     unsigned i_bits = 0;
     int i_shift = 0;
@@ -166,9 +188,21 @@ char *av_base64_encode(char *out, int out_size, const uint8_t *in, int in_size)
         *dst++ = b64[(i_bits << 6 >> i_shift) & 0x3f];
         i_shift -= 6;
     }
-    while ((dst - ret) & 3)
-        *dst++ = '=';
+    while ((dst - ret) & 3){
+        if (urlsafe) {
+            *dst++ = '\0';
+        }else{
+            *dst++ = '=';
+        }
+    }
     *dst = '\0';
 
     return ret;
+}
+
+char *av_base64_encode(char *out, int out_size, const uint8_t *in, int in_size){
+    return av_base64_encode_inner(out, out_size, in, in_size, 0);
+}
+char *av_base64_encode_urlsafe(char *out, int out_size, const uint8_t *in, int in_size){
+    return av_base64_encode_inner(out, out_size, in, in_size, 1);
 }

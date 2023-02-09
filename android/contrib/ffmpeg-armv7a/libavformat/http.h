@@ -45,7 +45,7 @@ void ff_http_init_auth_state(URLContext *dest, const URLContext *src);
  * @return a negative value if an error condition occurred, 0
  * otherwise
  */
-int ff_http_do_new_request(URLContext *h, const char *uri);
+int ff_http_do_new_request(URLContext *h, const char *uri, AVDictionary **opts);
 
 int ff_http_averror(int status_code, int default_averror);
 

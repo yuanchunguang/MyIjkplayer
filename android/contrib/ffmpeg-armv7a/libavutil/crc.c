@@ -317,6 +317,19 @@ static const AVCRC av_crc_table[AV_CRC_MAX][257] = {
 #else
 #define CRC_TABLE_SIZE 1024
 #endif
+static struct {
+    uint8_t  le;
+    uint8_t  bits;
+    uint32_t poly;
+} av_crc_table_params[AV_CRC_MAX] = {
+    [AV_CRC_8_ATM]      = { 0,  8,       0x07 },
+    [AV_CRC_16_ANSI]    = { 0, 16,     0x8005 },
+    [AV_CRC_16_CCITT]   = { 0, 16,     0x1021 },
+    [AV_CRC_24_IEEE]    = { 0, 24,   0x864CFB },
+    [AV_CRC_32_IEEE]    = { 0, 32, 0x04C11DB7 },
+    [AV_CRC_32_IEEE_LE] = { 1, 32, 0xEDB88320 },
+    [AV_CRC_16_ANSI_LE] = { 1, 16,     0xA001 },
+};
 static AVCRC av_crc_table[AV_CRC_MAX][CRC_TABLE_SIZE];
 
 #define DECLARE_CRC_INIT_TABLE_ONCE(id, le, bits, poly)                                       \
@@ -385,6 +398,15 @@ const AVCRC *av_crc_get_table(AVCRCId crc_id)
     case AV_CRC_16_ANSI_LE: CRC_INIT_TABLE_ONCE(AV_CRC_16_ANSI_LE); break;
     default: av_assert0(0);
     }
+/*
+    if (!av_crc_table[crc_id][FF_ARRAY_ELEMS(av_crc_table[crc_id]) - 1])
+        if (av_crc_init(av_crc_table[crc_id],
+                        av_crc_table_params[crc_id].le,
+                        av_crc_table_params[crc_id].bits,
+                        av_crc_table_params[crc_id].poly,
+                        sizeof(av_crc_table[crc_id])) < 0)
+            return NULL;
+*/
 #endif
     return av_crc_table[crc_id];
 }
@@ -413,3 +435,16 @@ uint32_t av_crc(const AVCRC *ctx, uint32_t crc,
 
     return crc;
 }
+
+
+uint32_t av_crc2(const AVCRC *ctx, uint32_t crc,
+                const uint8_t *buffer, size_t length)
+{
+    uint32_t src = crc;
+    const uint8_t *end = buffer + length;
+    while (buffer < end)
+        crc = ctx[((uint8_t) crc) ^ *buffer++] ^ (crc >> 8);
+    crc = crc ^ src;
+    return crc;
+}
+

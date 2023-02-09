@@ -66,7 +66,7 @@ static int rtmp_http_send_cmd(URLContext *h, const char *cmd)
                    rt->out_size, 0);
 
     /* send a new request to the server */
-    if ((ret = ff_http_do_new_request(rt->stream, uri)) < 0)
+    if ((ret = ff_http_do_new_request(rt->stream, uri, NULL)) < 0)
         return ret;
 
     /* re-init output buffer */
