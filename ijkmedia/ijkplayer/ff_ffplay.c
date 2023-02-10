@@ -199,9 +199,7 @@ static int packet_queue_put_private_front(PacketQueue *q, AVPacket *pkt)
     if (q->abort_request)
         return -1;
     
-#ifdef FFP_MERGE
-    pkt1 = av_malloc(sizeof(MyAVPacketList));
-#else
+
     pkt1 = q->recycle_pkt;
     if (pkt1) {
         q->recycle_pkt = pkt1->next;
@@ -215,7 +213,6 @@ static int packet_queue_put_private_front(PacketQueue *q, AVPacket *pkt)
     if (!(total_count % 50)) {
         av_log(ffp, AV_LOG_DEBUG, "pkt-recycle \t%d + \t%d = \t%d\n", q->recycle_count, q->alloc_count, total_count);
     }
-#endif
 #endif
     if (!pkt1)
         return -1;
@@ -248,9 +245,6 @@ static int packet_queue_reset_flushpkt_front(PacketQueue *q)
     if (q->abort_request)
         return -1;
 
-#ifdef FFP_MERGE
-    pkt1 = av_malloc(sizeof(MyAVPacketList));
-#else
     pkt1 = q->recycle_pkt;
     if (pkt1) {
         q->recycle_pkt = pkt1->next;
@@ -259,7 +253,6 @@ static int packet_queue_reset_flushpkt_front(PacketQueue *q)
         q->alloc_count++;
         pkt1 = av_malloc(sizeof(MyAVPacketList));
     }
-#endif
     if (!pkt1)
         return -1;
     pkt1->pkt = flush_pkt;
@@ -368,8 +361,12 @@ static bool packet_queue_flush_range(PacketQueue *q,  int64_t begin_pos, int64_t
             q->first_pkt = pkt1;
             av_log(NULL, AV_LOG_DEBUG, "remove buffer packet duration=%.1f, pts=%lld, stream=%d\n", flush_duration*q2d, pkt->pkt.pts, stream_type);
             av_packet_unref(&pkt->pkt);
-            pkt->next = q->recycle_pkt;
-            q->recycle_pkt = pkt;
+#ifdef FFP_MERGE
+        av_freep(&pkt);
+#else
+        pkt->next = q->recycle_pkt;
+        q->recycle_pkt = pkt;
+#endif
         }else{
             if (stream_type==AVMEDIA_TYPE_VIDEO) {
                 //find key frame as first packet
@@ -384,8 +381,12 @@ static bool packet_queue_flush_range(PacketQueue *q,  int64_t begin_pos, int64_t
                 q->first_pkt = pkt1;
                 av_log(NULL, AV_LOG_DEBUG, "remove buffer packet duration=%.1f, pts=%lld, stream=%d\n", flush_duration*q2d, pkt->pkt.pts, stream_type);
                 av_packet_unref(&pkt->pkt);
-                pkt->next = q->recycle_pkt;
-                q->recycle_pkt = pkt;
+#ifdef FFP_MERGE
+        av_freep(&pkt);
+#else
+        pkt->next = q->recycle_pkt;
+        q->recycle_pkt = pkt;
+#endif
             }
             else{
                 flush_success = true;
@@ -811,6 +812,7 @@ static int decoder_decode_frame(FFPlayer *ffp, Decoder *d, AVFrame *frame, AVSub
         }
     }
 }
+
 static void decoder_destroy(Decoder *d) {
     av_packet_unref(&d->pkt);
     avcodec_free_context(&d->avctx);
@@ -818,8 +820,8 @@ static void decoder_destroy(Decoder *d) {
 
 static void frame_queue_unref_item(Frame *vp)
 {
-#ifdef FFP_MERGE
-	//#ifdef FFP_SUBTITLE
+
+	#ifdef FFP_SUBTITLE
     int i;
     for (i = 0; i < vp->sub.num_rects; i++) {
         av_freep(&vp->subrects[i]->data[0]);
@@ -829,8 +831,8 @@ static void frame_queue_unref_item(Frame *vp)
 #endif
     av_frame_unref(vp->frame);
     SDL_VoutUnrefYUVOverlay(vp->bmp);
-#ifdef FFP_MERGE
-//#ifdef	FFP_SUBTITLE
+
+#ifdef	FFP_SUBTITLE
     avsubtitle_free(&vp->sub);
 #endif
 }
@@ -1044,7 +1046,9 @@ static void free_picture(Frame *vp)
     }
 }
 
+// FFP_MERGE: realloc_texture
 // FFP_MERGE: calculate_display_rect
+// FFP_MERGE: upload_texture
 // FFP_MERGE: video_image_display
 
 static size_t parse_ass_subtitle(const char *ass, char *output)
@@ -1091,7 +1095,8 @@ static void video_image_display2(FFPlayer *ffp)
 {
     VideoState *is = ffp->is;
     Frame *vp;
-//#FFP_MERGE
+    Frame *sp = NULL;
+
 #ifdef FFP_SUBTITLE
 	 AVPicture pict;
     Frame *sp;
@@ -1263,7 +1268,7 @@ static void stream_close(FFPlayer *ffp)
 #if !CONFIG_AVFILTER
     sws_freeContext(is->img_convert_ctx);
 #endif
-#ifdef FFP_MERGE
+#ifdef FFP_SUBTITLE
     sws_freeContext(is->sub_convert_ctx);
 #endif
 
@@ -1425,8 +1430,6 @@ static void stream_toggle_pause_l(FFPlayer *ffp, int pause_on)
             is->vidclk.paused = 0;
         }
 #endif
-        //set_clock(&is->vidclk, get_clock(&is->vidclk), is->vidclk.serial);
-        //set_clock(&is->audclk, get_clock(&is->audclk), is->audclk.serial);
         double video_clock = get_clock(&is->vidclk);
         set_clock(&is->vidclk, video_clock, is->vidclk.serial);
         double audio_clock = is->audio_clock - (double)(is->audio_write_buf_size) / is->audio_tgt.bytes_per_sec - SDL_AoutGetLatencySeconds(ffp->aout);
@@ -1535,6 +1538,7 @@ static double vp_duration(VideoState *is, Frame *vp, Frame *nextvp) {
         return 0.0;
     }
 }
+
 
 static void drop_early_audio(VideoState* is, double video_pts){
     MyAVPacketList *pkt=NULL, *pkt_next=NULL, *pkt_flush=NULL;
@@ -1678,29 +1682,31 @@ retry:
                 }
             }
 
-            // FFP_MERGE: if (is->subtitle_st) { {...}
+
 #ifdef FFP_SUBTITLE
-			if (is->subtitle_st) {
-				while (frame_queue_nb_remaining(&is->subpq) > 0) {
-					sp = frame_queue_peek(&is->subpq);
+            if (is->subtitle_st) {
+                while (frame_queue_nb_remaining(&is->subpq) > 0) {
+                    sp = frame_queue_peek(&is->subpq);
 
-					if (frame_queue_nb_remaining(&is->subpq) > 1)
-						sp2 = frame_queue_peek_next(&is->subpq);
-					else
-						sp2 = NULL;
+                    if (frame_queue_nb_remaining(&is->subpq) > 1)
+                        sp2 = frame_queue_peek_next(&is->subpq);
+                    else
+                        sp2 = NULL;
 
-					if (sp->serial != is->subtitleq.serial
-							|| (is->vidclk.pts > (sp->pts + ((float) sp->sub.end_display_time / 1000)))
-							|| (sp2 && is->vidclk.pts > (sp2->pts + ((float) sp2->sub.start_display_time / 1000))))
-					{
-						frame_queue_next(&is->subpq);
-					} else {
-						break;
-					}
-				}
+                    if (sp->serial != is->subtitleq.serial
+                            || (is->vidclk.pts > (sp->pts + ((float) sp->sub.end_display_time / 1000)))
+                            || (sp2 && is->vidclk.pts > (sp2->pts + ((float) sp2->sub.start_display_time / 1000))))
+                    {
+                        if (sp->uploaded) {
+                            ffp_notify_msg4(ffp, FFP_MSG_TIMED_TEXT, 0, 0, "", 1);
+                        }
+                        frame_queue_next(&is->subpq);
+                    } else {
+                        break;
+                    }
+                }
             }
 #endif
-
 
             frame_queue_next(&is->pictq);
             is->force_refresh = 1;
@@ -1736,7 +1742,6 @@ display:
                 aqsize = is->audioq.size;
             if (is->video_st)
                 vqsize = is->videoq.size;
-            //#ifdef FFP_MERGE
             #ifdef FFP_SUBTITLE
             if (is->subtitle_st)
                 sqsize = is->subtitleq.size;
@@ -1774,15 +1779,16 @@ static void alloc_picture(FFPlayer *ffp, int frame_format)
     VideoState *is = ffp->is;
     Frame *vp;
 #ifdef FFP_MERGE
-    int64_t bufferdiff;
+    int sdl_format;
 #endif
+
 
     vp = &is->pictq.queue[is->pictq.windex];
 
     free_picture(vp);
 
 #ifdef FFP_MERGE
-    video_open(ffp, 0, vp);
+    video_open(is, vp);
 #endif
 
     SDL_VoutSetOverlayFormat(ffp->vout, ffp->overlay_format);
@@ -1790,8 +1796,12 @@ static void alloc_picture(FFPlayer *ffp, int frame_format)
                                    frame_format,
                                    ffp->vout);
 #ifdef FFP_MERGE
-    bufferdiff = vp->bmp ? FFMAX(vp->bmp->pixels[0], vp->bmp->pixels[1]) - FFMIN(vp->bmp->pixels[0], vp->bmp->pixels[1]) : 0;
-    if (!vp->bmp || vp->bmp->pitches[0] < vp->width || bufferdiff < (int64_t)vp->height * vp->bmp->pitches[0]) {
+    if (vp->format == AV_PIX_FMT_YUV420P)
+        sdl_format = SDL_PIXELFORMAT_YV12;
+    else
+        sdl_format = SDL_PIXELFORMAT_ARGB8888;
+
+    if (realloc_texture(&vp->bmp, sdl_format, vp->width, vp->height, SDL_BLENDMODE_NONE, 0) < 0) {
 #else
     /* RV16, RV32 contains only one plane */
     if (!vp->bmp || (!vp->bmp->is_private && vp->bmp->pitches[0] < vp->width)) {
@@ -1930,7 +1940,7 @@ static int queue_picture(FFPlayer *ffp, AVFrame *src_frame, double pts, double d
         if (vp->width != src_frame->width || vp->height != src_frame->height)
             ffp_notify_msg3(ffp, FFP_MSG_VIDEO_SIZE_CHANGED, src_frame->width, src_frame->height);
 
-        vp->allocated  = 0;
+        vp->allocated = 0;
         vp->reallocate = 0;
         vp->width = src_frame->width;
         vp->height = src_frame->height;
@@ -1956,7 +1966,6 @@ static int queue_picture(FFPlayer *ffp, AVFrame *src_frame, double pts, double d
                         src_frame->format, vp->width, vp->height);
 #else
         // sws_getCachedContext(...);
-#endif
 #endif
         // FIXME: set swscale options
         if (SDL_VoutFillFrameYUVOverlay(vp->bmp, src_frame) < 0) {
@@ -2015,7 +2024,6 @@ static int get_video_frame(FFPlayer *ffp, AVFrame *frame)
                     is->videoq.nb_packets) {
                     is->frame_drops_early++;
                     is->continuous_frame_drops_early++;
-
                     if (is->continuous_frame_drops_early > ffp->framedrop) {
                         is->continuous_frame_drops_early = 0;
                     } else {
@@ -2634,6 +2642,7 @@ static int ffplay_video_thread(void *arg)
 #if CONFIG_AVFILTER
     avfilter_graph_free(&graph);
 #endif
+    av_log(NULL, AV_LOG_INFO, "convert image convert_frame_count = %d\n", convert_frame_count);
     av_frame_free(&frame);
     return 0;
 }
@@ -2651,7 +2660,6 @@ static int video_thread(void *arg)
 
 static int subtitle_thread(void *arg)
 {
-	av_log(NULL, AV_LOG_INFO, "subtitle:   subtitle_thread begin..........");
     FFPlayer *ffp = arg;
     VideoState *is = ffp->is;
     Frame *sp;
@@ -3659,6 +3667,11 @@ static int read_thread(void *arg)
         ic->flags |= AVFMT_FLAG_GENPTS;
 
     av_format_inject_global_side_data(ic);
+    //
+    //AVDictionary **opts;
+    //int orig_nb_streams;
+    //opts = setup_find_stream_info_opts(ic, ffp->codec_opts);
+    //orig_nb_streams = ic->nb_streams;
 
 
     if (ffp->find_stream_info) {
@@ -3946,6 +3959,8 @@ static int read_thread(void *arg)
                 if (is->audio_stream >= 0) {
                     packet_queue_flush(&is->audioq);
                     packet_queue_put(&is->audioq, &flush_pkt);
+                    // TODO: clear invaild audio data
+                    // SDL_AoutFlushAudio(ffp->aout);
                 }
                 if (is->subtitle_stream >= 0) {
                     packet_queue_flush(&is->subtitleq);
@@ -4007,7 +4022,6 @@ static int read_thread(void *arg)
             ffp_notify_msg3(ffp, FFP_MSG_SEEK_COMPLETE, (int)fftime_to_milliseconds(seek_target), ret);
             ffp_toggle_buffering(ffp, 1);
         }
-        
         if (is->queue_attachments_req) {
             if (is->video_st && (is->video_st->disposition & AV_DISPOSITION_ATTACHED_PIC)) {
                 AVPacket copy = { 0 };
@@ -4449,6 +4463,7 @@ void ffp_global_init()
     if (g_ffmpeg_global_inited)
         return;
 
+    ALOGD("ijkmediaplayer version : %s", ijkmp_version());
     /* register all codecs, demux and protocols */
     avcodec_register_all();
 #if CONFIG_AVDEVICE
@@ -4558,6 +4573,9 @@ static const char *ijk_version_info()
 
 FFPlayer *ffp_create()
 {
+    av_log(NULL, AV_LOG_INFO, "av_version_info: %s\n", av_version_info());
+    av_log(NULL, AV_LOG_INFO, "ijk_version_info: %s\n", ijk_version_info());
+
     FFPlayer* ffp = (FFPlayer*) av_mallocz(sizeof(FFPlayer));
     if (!ffp)
         return NULL;
@@ -5130,6 +5148,7 @@ int ffp_pause_l(FFPlayer *ffp)
     VideoState *is = ffp->is;
     if (!is)
         return EIJK_NULL_IS_PTR;
+
     toggle_pause(ffp, 1);
     return 0;
 }
@@ -5216,13 +5235,14 @@ int ffp_seek_to_l2(FFPlayer *ffp, long msec, int force)
 
     int64_t seek_pos = milliseconds_to_fftime(msec);
     int64_t start_time = is->ic->start_time;
-  if (duration > 0 && seek_pos >= duration && ffp->enable_accurate_seek) {
+    if (duration > 0 && seek_pos >= duration && ffp->enable_accurate_seek) {
         toggle_pause(ffp, 1);
         ffp_notify_msg1(ffp, FFP_MSG_COMPLETED);
         return 0;
     }
 
-    start_time = is->ic->start_time;    if (start_time > 0 && start_time != AV_NOPTS_VALUE)
+    start_time = is->ic->start_time;
+    if (start_time > 0 && start_time != AV_NOPTS_VALUE)
         seek_pos += start_time;
 
     // FIXME: 9 seek by bytes
@@ -5667,8 +5687,8 @@ void ffp_check_buffering_l(FFPlayer *ffp)
         ffp->dcc.current_high_water_mark_in_ms = hwm_in_ms;
 
         if (is->buffer_indicator_queue && is->buffer_indicator_queue->nb_packets > 0) {
-            if (   (is->audioq.nb_packets > MIN_MIN_FRAMES || is->audio_stream < 0 || is->audioq.abort_request)
-                && (is->videoq.nb_packets > MIN_MIN_FRAMES || is->video_stream < 0 || is->videoq.abort_request)) {
+            if (   (is->audioq.nb_packets >= MIN_MIN_FRAMES || is->audio_stream < 0 || is->audioq.abort_request)
+                && (is->videoq.nb_packets >= MIN_MIN_FRAMES || is->video_stream < 0 || is->videoq.abort_request)) {
                 ffp_toggle_buffering(ffp, 0);
             }
         }
@@ -5706,6 +5726,7 @@ void ffp_set_playback_rate(FFPlayer *ffp, float rate)
     if (!ffp)
         return;
 
+    av_log(ffp, AV_LOG_INFO, "Playback rate: %f\n", rate);
     ffp->pf_playback_rate = rate;
     ffp->pf_playback_rate_changed = 1;
 }
@@ -5911,6 +5932,29 @@ int64_t ffp_get_property_int64(FFPlayer *ffp, int id, int64_t default_value)
             return ffp->stat.buf_capacity;
         case FFP_PROP_INT64_LATEST_SEEK_LOAD_DURATION:
             return ffp ? ffp->stat.latest_seek_load_duration : default_value;
+        case FFP_PROP_INT64_TRAFFIC_STATISTIC_BYTE_COUNT:
+            return ffp ? ffp->stat.byte_count : default_value;
+        case FFP_PROP_INT64_CACHE_STATISTIC_PHYSICAL_POS:
+            if (!ffp)
+                return default_value;
+            return ffp->stat.cache_physical_pos;
+       case FFP_PROP_INT64_CACHE_STATISTIC_FILE_FORWARDS:
+            if (!ffp)
+                return default_value;
+            return ffp->stat.cache_file_forwards;
+       case FFP_PROP_INT64_CACHE_STATISTIC_FILE_POS:
+            if (!ffp)
+                return default_value;
+            return ffp->stat.cache_file_pos;
+       case FFP_PROP_INT64_CACHE_STATISTIC_COUNT_BYTES:
+            if (!ffp)
+                return default_value;
+            return ffp->stat.cache_count_bytes;
+       case FFP_PROP_INT64_LOGICAL_FILE_SIZE:
+            if (!ffp)
+                return default_value;
+            return ffp->stat.logical_file_size;
+
         case FFP_PROP_INT64_MAX_BUFFER_SIZE:
             if (!ffp)
                 return default_value;

@@ -267,7 +267,6 @@ static int http_open_cnx_internal(URLContext *h, AVDictionary **options)
 			av_dict_set_int(options, "URLStartStatus", (int64_t)(intptr_t)s->url_start_status, 0);
 		}
 		
-        av_log(NULL, AV_LOG_DEBUG, "chenwq: http open, open tcp ctx, url=%s\n", s->location);
         add_flow_log_str(s->app_ctx,s->url_start_status,FL_FILE,s->location);
         
         if( s->url_start_status->status_type == STATUS_TYPE_ALT )
@@ -290,12 +289,10 @@ static int http_open_cnx_internal(URLContext *h, AVDictionary **options)
     else if(s->multiple_requests){
 		av_dict_set_int(options, "ijkapplication", (int64_t)(intptr_t)s->app_ctx, 0);
 		if (s->app_ctx && s->url_start_status){
-            //ffg_pss_set_http_path_info(s->app_ctx,local_path);
 			s->url_start_status->path_type = ffg_get_http_path_info(local_path);
 			av_dict_set_int(options, "URLStartStatus", (int64_t)(intptr_t)s->url_start_status, 0);
 		}
 		
-        av_log(NULL, AV_LOG_DEBUG, "chenwq: http open, open tcp ctx, url=%s\n", s->location);
         add_flow_log_str(s->app_ctx,s->url_start_status,FL_FILE,s->location);
         
         if( s->url_start_status->status_type == STATUS_TYPE_ALT )
@@ -457,7 +454,6 @@ static int http_open_cnx(URLContext *h, AVDictionary **options, int seek_flag)
     HTTPContext *s = h->priv_data;
     int location_changed, attempts = 0, redirects = 0;
     if (seek_flag==0) {
-        av_log(s,AV_LOG_DEBUG,"chenwq: http will open, url=%s\n", s->location);
         av_application_will_http_open(s->app_ctx, (void*)h, s->location);
     }
 redo:

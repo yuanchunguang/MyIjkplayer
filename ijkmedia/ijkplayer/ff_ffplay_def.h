@@ -230,6 +230,7 @@ typedef struct Frame {
     SDL_Texture *bmp;
 #else
     SDL_VoutOverlay *bmp;
+#endif
     int allocated;
     int reallocate;
     int width;
@@ -310,7 +311,6 @@ typedef struct VideoState {
     Clock extclk;
 
     FrameQueue pictq;
-    //#ifdef FFP_MERGE
 # ifdef FFP_SUBTITLE
     FrameQueue subpq;
 #endif
@@ -318,8 +318,8 @@ typedef struct VideoState {
 
     Decoder auddec;
     Decoder viddec;
-    //#ifdef FFP_MERGE
-    # ifdef FFP_SUBTITLE
+
+# ifdef FFP_SUBTITLE
     Decoder subdec;
 
     int viddec_width;
@@ -329,7 +329,7 @@ typedef struct VideoState {
     int audio_stream;
 
     int av_sync_type;
-
+    void *handle;
     double audio_clock;
     int audio_clock_serial;
     double audio_diff_cum; /* used for AV difference average computation */
@@ -374,8 +374,8 @@ typedef struct VideoState {
     double last_vis_time;
 
 
-    # ifdef FFP_SUBTITLE
-   SDL_Texture *vis_texture;
+# ifdef FFP_SUBTITLE
+    SDL_Texture *vis_texture;
     SDL_Texture *sub_texture;
     int subtitle_stream;
     AVStream *subtitle_st;
@@ -392,9 +392,9 @@ typedef struct VideoState {
 #if !CONFIG_AVFILTER
     struct SwsContext *img_convert_ctx;
 #endif
+
 #ifdef FFP_SUBTITLE
     struct SwsContext *sub_convert_ctx;
-   // SDL_Rect last_display_rect;
 #endif
     int eof;
     int read_end;
@@ -452,8 +452,6 @@ typedef struct VideoState {
 static AVInputFormat *file_iformat;
 static const char *input_filename;
 static const char *window_title;
-static int fs_screen_width;
-static int fs_screen_height;
 static int default_width  = 640;
 static int default_height = 480;
 static int screen_width  = 0;
@@ -505,7 +503,6 @@ static AVPacket eof_pkt;
 
 static SDL_Window *window;
 static SDL_Renderer *renderer;
-static SDL_Surface *screen;
 #endif
 
 /*****************************************************************************
@@ -612,7 +609,7 @@ typedef struct FFPlayer {
 #endif
     int audio_disable;
     int video_disable;
-    # ifdef FFP_SUBTITLE
+# ifdef FFP_SUBTITLE
     int subtitle_disable;
 #endif
     const char* wanted_stream_spec[AVMEDIA_TYPE_NB];
@@ -638,8 +635,7 @@ typedef struct FFPlayer {
     int infinite_buffer;
     enum ShowMode show_mode;
     char *audio_codec_name;
-
-    # ifdef FFP_SUBTITLE
+# ifdef FFP_SUBTITLE
     char *subtitle_codec_name;
 #endif
     char *video_codec_name;
@@ -666,6 +662,7 @@ typedef struct FFPlayer {
 #ifdef FFP_MERGE
     SDL_Surface *screen;
 #endif
+
 
     /* extra fields */
     SDL_Aout *aout;

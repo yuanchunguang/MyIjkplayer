@@ -44,10 +44,8 @@ inline static void ijkmp_destroy(IjkMediaPlayer *mp)
     if (!mp)
         return;
 
-    MPTRACE("%s, ffplayer destroy begin\n", __func__);
     ffp_destroy_p(&mp->ffplayer);
     if (mp->msg_thread) {
-        MPTRACE("%s, ffplayer destroy wait ff_msg_loop thread\n", __func__);
         SDL_WaitThread(mp->msg_thread, NULL);
         mp->msg_thread = NULL;
     }
@@ -57,8 +55,6 @@ inline static void ijkmp_destroy(IjkMediaPlayer *mp)
     freep((void**)&mp->data_source);
     memset(mp, 0, sizeof(IjkMediaPlayer));
     freep((void**)&mp);
-    
-    MPTRACE("%s, ffplayer destroy finish\n", __func__);
 }
 
 inline static void ijkmp_destroy_p(IjkMediaPlayer **pmp)
@@ -116,12 +112,10 @@ void ijkmp_change_state_l(IjkMediaPlayer *mp, int new_state)
 {
     mp->mp_state = new_state;
     ffp_notify_msg1(mp->ffplayer, FFP_MSG_PLAYBACK_STATE_CHANGED);
-    MPTRACE("change play state=%d\n", new_state);
 }
 
 int ijkmp_get_state(IjkMediaPlayer *mp)
 {
-    MPTRACE("get play state=%d\n", mp->mp_state);
     return mp->mp_state;
 }
 
@@ -789,6 +783,7 @@ void *ijkmp_set_weak_thiz(IjkMediaPlayer *mp, void *weak_thiz)
     return prev_weak_thiz;
 }
 
+/* need to call msg_free_res for freeing the resouce obtained in msg */
 int ijkmp_get_msg(IjkMediaPlayer *mp, AVMessage *msg, int block)
 {
     assert(mp);
@@ -911,9 +906,10 @@ int ijkmp_get_msg(IjkMediaPlayer *mp, AVMessage *msg, int block)
             pthread_mutex_unlock(&mp->mutex);
             break;
         }
-
-        if (continue_wait_next_msg)
+        if (continue_wait_next_msg) {
+            msg_free_res(msg);
             continue;
+        }
 
         return retval;
     }
