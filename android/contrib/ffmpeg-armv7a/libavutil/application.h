@@ -22,6 +22,7 @@
 #define AVUTIL_APPLICATION_H
 
 #include "libavutil/log.h"
+#include "libavutil/dict.h"
 #include <pthread.h>
 
 #define AVAPP_EVENT_WILL_HTTP_OPEN  1 //AVAppHttpEvent
@@ -117,6 +118,7 @@ typedef struct AVAppHttpEvent
     int64_t  offset;
     int      error;
     int      http_code;
+    int64_t  filesize;
     int      is_hit_cache;
     char redirect_ip[1024];
 } AVAppHttpEvent;

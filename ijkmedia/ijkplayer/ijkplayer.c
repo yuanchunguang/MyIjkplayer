@@ -278,17 +278,6 @@ int ijkmp_get_start_error_code_ex(IjkMediaPlayer *mp)
     return ret;
 }
 
-void ijkmp_set_playback_rate(IjkMediaPlayer *mp, float rate)
-{
-    assert(mp);
-
-    MPTRACE("%s(%f)\n", __func__, rate);
-    pthread_mutex_lock(&mp->mutex);
-    ffp_set_playback_rate(mp->ffplayer, rate);
-    pthread_mutex_unlock(&mp->mutex);
-    MPTRACE("%s()=void\n", __func__);
-}
-
 int ijkmp_set_stream_selected(IjkMediaPlayer *mp, int stream, int selected)
 {
     assert(mp);
@@ -681,10 +670,7 @@ int ijkmp_seek_to(IjkMediaPlayer *mp, long msec)
     return retval;
 }
 
-int ijkmp_get_state(IjkMediaPlayer *mp)
-{
-    return mp->mp_state;
-}
+
 
 static long ijkmp_get_current_position_l(IjkMediaPlayer *mp)
 {

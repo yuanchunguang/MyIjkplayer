@@ -70,7 +70,7 @@
 #define DEFAULT_HIGH_WATER_MARK_IN_BYTES        (256 * 1024)
 
 
-#define  FFP_SUBTITLE 1
+#define  FFP_SUBTITLE 0
 
 /*
  * START: buffering after prepared/seeked
@@ -428,7 +428,7 @@ typedef struct VideoState {
     int is_video_high_res; // above 1080p
 
     PacketQueue *buffer_indicator_queue;
-
+    volatile int latest_seek_load_serial;
     volatile int latest_video_seek_load_serial;
     volatile int latest_audio_seek_load_serial;
     volatile int64_t latest_seek_load_start_at;
@@ -452,6 +452,8 @@ typedef struct VideoState {
 static AVInputFormat *file_iformat;
 static const char *input_filename;
 static const char *window_title;
+static int fs_screen_width;
+static int fs_screen_height;
 static int default_width  = 640;
 static int default_height = 480;
 static int screen_width  = 0;
@@ -501,6 +503,7 @@ static AVPacket eof_pkt;
 #define FF_ALLOC_EVENT   (SDL_USEREVENT)
 #define FF_QUIT_EVENT    (SDL_USEREVENT + 2)
 
+static SDL_Surface *screen;
 static SDL_Window *window;
 static SDL_Renderer *renderer;
 #endif
@@ -663,7 +666,6 @@ typedef struct FFPlayer {
     SDL_Surface *screen;
 #endif
 
-
     /* extra fields */
     SDL_Aout *aout;
     SDL_Vout *vout;
@@ -745,7 +747,7 @@ typedef struct FFPlayer {
     FFDemuxCacheControl dcc;
 
     AVApplicationContext *app_ctx;
-    IjkIOManagerContext *ijkio_manager_ctx;
+	IjkIOManagerContext *ijkio_manager_ctx;
 
     int enable_accurate_seek;
     int accurate_seek_timeout;
